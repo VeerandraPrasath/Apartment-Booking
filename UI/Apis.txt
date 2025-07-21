@@ -1,0 +1,103 @@
+Cities Api:
+
+1.POST http://localhost:3000/api/cities 
+
+{
+  "name": "Chennai"
+}
+
+2.GET http://localhost:3000/api/cities
+
+
+
+Users Api :
+1.POST http://localhost:3000/api/users
+Body:
+{
+  "name": "Veer",
+  "email": "veer@example.com",
+  "role": "tenant",
+   "gender":"male"
+}
+
+2.GET http://localhost:3000/api/users/id/1
+3.GET http://localhost:3000/api/users/name/veer
+4.GET http://localhost:3000/api/users/role/tenant
+5.GET http://localhost:3000/api/users
+
+
+Apartment API:
+1.POST /api/apartments
+{
+  "name": "Palm Residency",
+  "location": "OMR, Chennai",
+  "city_id": 1
+}
+2.GET /api/apartments/id/1
+3.GET /api/apartments/name/Palm Residency
+4.GET /api/apartments---->
+
+[
+  {
+    "id": 1,
+    "name": "Palm Residency",
+    "location": "OMR, Chennai",
+    "city_id": 1
+  },
+  {
+    "id": 2,
+    "name": "Skyline Towers",
+    "location": "Anna Nagar, Chennai",
+    "city_id": 1
+  },
+  {
+    "id": 3,
+    "name": "Sunshine Villas",
+    "location": "MG Road, Bengaluru",
+    "city_id": 2
+  }
+]
+
+
+5.PUT /api/apartments/1
+{
+  "name": "Palm Residency 2",
+  "location": "Anna Nagar, Chennai",
+  "city_id": 1
+}
+
+6.GET /api/apartments/city/1/grouped----->Use for Dispalying all the apartment in the selected City
+
+
+
+Flat Api:
+1.POST /api/flats/apartment/:apartmentId
+{
+  "name": "C6",
+  "isBooked": false,
+  "role": null,
+  "upto": "2025-08-01T00:00:00Z",
+  "rooms": [
+    {
+      "name": "Room 1",
+      "isBooked": false,
+      "role": null,
+      "upto": null,
+      "cottages": [
+        {
+          "name": "Cottage 1",
+          "isBooked": false,
+          "role": null,
+          "upto": null
+        }
+      ]
+    }
+  ]
+}
+
+
+
+
+
+
+

@@ -1,0 +1,822 @@
+"use client"
+
+import { useState, useEffect } from "react"
+import { Card, CardContent } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Textarea } from "@/components/ui/textarea"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { Calendar, MapPin, User, Users, Clock, CheckCircle, Home, Bed, Building2, AlertTriangle } from "lucide-react"
+import { format } from "date-fns"
+import Link from "next/link"
+
+const getDefaultAccommodationType = (role: string) => {
+  switch (role) {
+    case "Manager":
+      return "flats"
+    case "Senior":
+      return "rooms"
+    case "Project Engineer":
+      return "beds"
+    default:
+      return "beds"
+  }
+}
+
+
+
+const checkForConflicts = (assignedAccommodations: { [key: string]: string }) => {
+  const assignments = Object.values(assignedAccommodations)
+  const conflicts: string[] = []
+
+  for (let i = 0; i < assignments.length; i++) {
+    for (let j = i + 1; j < assignments.length; j++) {
+      const item1 = assignments[i]
+      const item2 = assignments[j]
+
+      if (item1 === item2) {
+        conflicts.push(`Duplicate assignment: ${item1}`)
+        continue
+      }
+
+      const parts1 = item1.split("-")
+      const parts2 = item2.split("-")
+
+      if (parts1.length === 1 && parts2.length > 1 && parts2[0] === parts1[0]) {
+        conflicts.push(`Conflict: ${item1} (flat) overlaps with ${item2}`)
+      } else if (parts2.length === 1 && parts1.length > 1 && parts1[0] === parts2[0]) {
+        conflicts.push(`Conflict: ${item2} (flat) overlaps with ${item1}`)
+      } else if (parts1.length === 2 && parts2.length === 3 && parts1[0] === parts2[0] && parts1[1] === parts2[1]) {
+        conflicts.push(`Conflict: ${item1} (room) overlaps with ${item2} (bed)`)
+      } else if (parts2.length === 2 && parts1.length === 3 && parts2[0] === parts1[0] && parts2[1] === parts1[1]) {
+        conflicts.push(`Conflict: ${item2} (room) overlaps with ${item1} (bed)`)
+      }
+    }
+  }
+
+  return conflicts
+}
+
+export default function AdminRequestsPage() {
+  const [requests, setRequests] = useState<any[]>([])
+  const [selectedRequest, setSelectedRequest] = useState<any>(null)
+  const [assignedAccommodations, setAssignedAccommodations] = useState<{ [key: string]: string }>({})
+  const [accommodationTypes, setAccommodationTypes] = useState<{ [key: string]: string }>({})
+  const [accommodationTreeByCity, setAccommodationTreeByCity] = useState<any>(null)
+  const [remarks, setRemarks] = useState("")
+  const [loading, setLoading] = useState(false)
+  const [viewMode, setViewMode] = useState<"individual" | "team">("individual")
+  const [conflicts, setConflicts] = useState<string[]>([])
+  const [mockUsers, setUsers] = useState<{ id: number; name: string; email: string; role: string }[]>([])
+  const [availableAccommodationsMap, setAvailableAccommodationsMap] = useState<{ [key: string]: any[] }>({})
+
+  useEffect(() => {
+    loadPendingRequests()
+    fetch("http://localhost:5001/api/users")
+      .then((res) => res.json())
+      .then((data) => setUsers(data))
+      .catch(() => setUsers([]))
+  }, [])
+
+  useEffect(() => {
+    if (Object.keys(assignedAccommodations).length > 0) {
+      const detectedConflicts = checkForConflicts(assignedAccommodations)
+      setConflicts(detectedConflicts)
+    } else {
+      setConflicts([])
+    }
+  }, [assignedAccommodations])
+
+  // Load available accommodations for each person when dialog opens or assignments/types change
+ useEffect(() => {
+  if (selectedRequest) {
+    const allPeople = [
+      {
+        email: selectedRequest.user.email,
+        name: selectedRequest.user.name,
+        role: selectedRequest.user.role,
+        isRequester: true,
+      },
+      ...(selectedRequest.teamMembers || []).map((email: string) => {
+        const user = mockUsers.find((u) => u.email === email)
+        return {
+          email,
+          name: user?.name || email,
+          role: user?.role || "Project Engineer",
+          isRequester: false,
+        }
+      }),
+    ]
+    const roleOrder = { Manager: 1, Senior: 2, "Project Engineer": 3 }
+    const sortedPeople = allPeople.sort(
+      (a, b) =>
+        (roleOrder[a.role as keyof typeof roleOrder] || 999) -
+        (roleOrder[b.role as keyof typeof roleOrder] || 999),
+    )
+
+    // Fetch all available accommodations in parallel
+    Promise.all(
+      sortedPeople.map(async (person, personIndex) => {
+        const personKey = `${person.email}_${personIndex}`
+        const currentType = accommodationTypes[personKey] || getDefaultAccommodationType(person.role)
+        const available = await getAvailableAccommodations(
+          selectedRequest.city,
+          currentType,
+          assignedAccommodations
+        )
+        return { personKey, available }
+      })
+    ).then((results) => {
+      const map: { [key: string]: any[] } = {}
+      results.forEach(({ personKey, available }) => {
+        map[personKey] = available
+      })
+      setAvailableAccommodationsMap(map)
+    })
+  } else {
+    setAvailableAccommodationsMap({})
+  }
+}, [selectedRequest, accommodationTypes, assignedAccommodations, mockUsers])
+
+  const loadPendingRequests = async () => {
+    try {
+      setLoading(true)
+      const response = await fetch("http://localhost:5001/api/requests?status=pending")
+      const data = await response.json()
+      if (data.success && Array.isArray(data.requests)) {
+        const pendingRequests = data.requests
+          .filter((req: any) => req.status === "pending")
+          .map((req: any) => ({
+            id: req.id,
+            city: req.city_id,
+            bookingType: req.booking_type,
+            user: req.user,
+            teamMembers: req.team_members,
+            dates: {
+              from: req.start_time,
+              to: req.end_time,
+            },
+            checkInTime: req.check_in,
+            checkOutTime: req.check_out,
+            status: req.status,
+            remarks: req.remarks,
+            timestamp: req.created_at,
+          }))
+        setRequests(pendingRequests)
+      } else {
+        setRequests([])
+      }
+    } catch (error) {
+      console.error("Error loading pending requests:", error)
+      setRequests([])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const getAvailableAccommodations = async (
+  cityId: number,
+  type: string,
+  assignedAccommodations: { [key: string]: string }
+) => {
+  console.log("Fetching accommodations for city:", cityId, "type:", type)
+  try {
+    const response = await fetch(`http://localhost:5001/api/cities/${cityId}/accommodations`)
+    const data = await response.json()
+    if (!data.success || !Array.isArray(data.apartments)) return []
+      setAccommodationTreeByCity(data)
+    console.log("Fetched accommodations:", data.apartments)
+    console.log("Assigned accommodations:", assignedAccommodations)
+    const assignedItems = Object.values(assignedAccommodations)
+    const accommodations: { apartment: string; items: string[] }[] = []
+
+    for (const apartment of data.apartments) {
+      let items: string[] = []
+
+      if (type === "flats") {
+        for (const flat of apartment.flats || []) {
+          const allRoomsUnbooked = (flat.rooms || []).every(
+            (room: any) =>
+              !room.is_booked &&
+              (room.cottages || []).every((bed: any) => !bed.is_booked)
+          )
+          if (!flat.is_booked && allRoomsUnbooked) {
+            items.push(flat.name)
+          }
+        }
+      } else if (type === "rooms") {
+        for (const flat of apartment.flats || []) {
+          for (const room of flat.rooms || []) {
+            const allBedsUnbooked = (room.cottages || []).every((bed: any) => !bed.is_booked)
+            if (!room.is_booked && allBedsUnbooked && !flat.is_booked) {
+              items.push(`${flat.name}-${room.name}`)
+            }
+          }
+        }
+      } else if (type === "beds") {
+        for (const flat of apartment.flats || []) {
+          for (const room of flat.rooms || []) {
+            for (const bed of room.cottages || []) {
+              if (!bed.is_booked && !room.is_booked && !flat.is_booked) {
+                items.push(`${flat.name}-${room.name}-${bed.name}`)
+              }
+            }
+          }
+        }
+      }
+
+      const availableItems = items.filter((item) => !assignedItems.includes(item))
+      if (availableItems.length > 0) {
+        accommodations.push({ apartment: apartment.name, items: availableItems })
+      }
+    }
+
+    return accommodations
+  } catch (error) {
+    console.error("Error fetching accommodations:", error)
+    return []
+  }
+}
+
+  const handleApprove = async () => {
+  if (!selectedRequest || Object.keys(assignedAccommodations).length === 0) return
+  if (conflicts.length > 0) {
+    alert("Cannot approve request due to accommodation conflicts. Please resolve conflicts first.")
+    return
+  }
+  try {
+    setLoading(true)
+    // Build assignedAccommodations array for API
+    const allPeople = [
+      {
+        email: selectedRequest.user.email,
+        name: selectedRequest.user.name,
+        role: selectedRequest.user.role,
+        isRequester: true,
+      },
+      ...(selectedRequest.teamMembers || []).map((email: string) => {
+        const user = mockUsers.find((u) => u.email === email)
+        return {
+          email,
+          name: user?.name || email,
+          role: user?.role || "Project Engineer",
+          isRequester: false,
+        }
+      }),
+    ]
+
+    const assignedAccommodationsArray = allPeople.map((person, idx) => {
+  const personKey = `${person.email}_${idx}`
+  const value = assignedAccommodations[personKey] || ""
+  // Parse value: "Flat1", "Flat1-Room2", "Flat1-Room2-Bed3"
+  const parts = value.split("-")
+  let apartment_id = null, flat_id = null, room_id = null, bed_id = null
+
+  if (parts.length === 1) {
+    // Only flat assigned
+    const result = getFlatAndApartmentIdByName(parts[0])
+    flat_id = result.flat_id
+    apartment_id = result.apartment_id
+  } else if (parts.length === 2) {
+    // Flat and room assigned
+    const result = getFlatAndApartmentIdByName(parts[0])
+    flat_id = result.flat_id
+    apartment_id = result.apartment_id
+    room_id = getRoomIdByName(parts[0], parts[1])
+  } else if (parts.length === 3) {
+    // Flat, room, and bed assigned
+    const result = getFlatAndApartmentIdByName(parts[0])
+    flat_id = result.flat_id
+    apartment_id = result.apartment_id
+    room_id = getRoomIdByName(parts[0], parts[1])
+    bed_id = getBedIdByName(parts[0], parts[1], parts[2])
+  }
+
+  return {
+    email: person.email,
+    name: person.name,
+    role: person.role,
+    apartment_id,
+    flat_id,
+    room_id,
+    bed_id,
+  }
+})
+
+    // Helper functions to get IDs by names (implement based on your accommodation data)
+  function getFlatAndApartmentIdByName(flatName: string) {
+  if (!accommodationTreeByCity) return { flat_id: null, apartment_id: null }
+  for (const apartment of accommodationTreeByCity.apartments || []) {
+    for (const flat of apartment.flats || []) {
+      if (flat.name === flatName) {
+        return { flat_id: flat.id, apartment_id: apartment.id }
+      }
+    }
+  }
+  return { flat_id: null, apartment_id: null }
+}
+
+function getRoomIdByName(flatName: string, roomName: string) {
+  if (!accommodationTreeByCity) return null
+  for (const apartment of accommodationTreeByCity.apartments || []) {
+    for (const flat of apartment.flats || []) {
+      if (flat.name === flatName) {
+        for (const room of flat.rooms || []) {
+          if (room.name === roomName) {
+            return room.id
+          }
+        }
+      }
+    }
+  }
+  return null
+}
+
+function getBedIdByName(flatName: string, roomName: string, bedName: string) {
+  if (!accommodationTreeByCity) return null
+  for (const apartment of accommodationTreeByCity.apartments || []) {
+    for (const flat of apartment.flats || []) {
+      if (flat.name === flatName) {
+        for (const room of flat.rooms || []) {
+          if (room.name === roomName) {
+            for (const bed of room.cottages || []) {
+              if (bed.name === bedName) {
+                return bed.id
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return null
+}
+
+    // Build request body
+    const requestBody = {
+      status: "approved",
+      assignedAccommodations: assignedAccommodationsArray,
+      remarks,
+      processedAt: new Date().toISOString(),
+    }
+    console.log("Request body:", requestBody.assignedAccommodations)
+    // Make API call
+    const response = await fetch(`http://localhost:5001/api/requests/${selectedRequest.id}/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestBody),
+    })
+    const result = await response.json()
+    if (result.success) {
+      await loadPendingRequests()
+      setSelectedRequest(null)
+      setAssignedAccommodations({})
+      setAccommodationTypes({})
+      setRemarks("")
+      setConflicts([])
+      alert("Request approved successfully!")
+    } else {
+      alert("Error approving request. Please try again.")
+    }
+  } catch (error) {
+    console.error("Error approving request:", error)
+    alert("Error approving request. Please try again.")
+  } finally {
+    setLoading(false)
+  }
+}
+
+  const handleReject = async () => {
+    if (!selectedRequest) return
+    try {
+      setLoading(true)
+      // TODO: Replace with API call
+      // const response = await fetch(`/api/requests/${selectedRequest.timestamp}/reject`, {...})
+      const allRequests = JSON.parse(localStorage.getItem("accommodationRequests") || "[]")
+      const updatedAllRequests = allRequests.map((req: any) =>
+        req.timestamp === selectedRequest.timestamp
+          ? { ...req, status: "rejected", remarks, processedAt: new Date().toISOString() }
+          : req,
+      )
+      localStorage.setItem("accommodationRequests", JSON.stringify(updatedAllRequests))
+      await loadPendingRequests()
+      setSelectedRequest(null)
+      setRemarks("")
+      alert("Request rejected successfully!")
+    } catch (error) {
+      console.error("Error rejecting request:", error)
+      alert("Error rejecting request. Please try again.")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const filteredRequests = requests.filter((req) => {
+    if (viewMode === "individual") {
+      return req.bookingType === "individual"
+    } else {
+      return req.bookingType === "team"
+    }
+  })
+
+  const individualCount = requests.filter((req) => req.bookingType === "individual").length
+  const teamCount = requests.filter((req) => req.bookingType === "team").length
+
+  if (loading && requests.length === 0) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading pending requests...</p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <div className="container mx-auto px-4 py-6">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Pending Requests</h1>
+            <p className="text-gray-600">{filteredRequests.length} requests awaiting approval</p>
+          </div>
+          <div className="flex gap-2">
+            <Link href="/admin/occupancy">
+              <Button variant="outline">Occupancy View</Button>
+            </Link>
+            <Link href="/admin/management">
+              <Button variant="outline">System Management</Button>
+            </Link>
+          </div>
+        </div>
+
+        {/* Toggle between Individual and Team requests */}
+        <Card className="mb-6">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-center">
+              <div className="flex bg-gray-100 rounded-lg p-1">
+                <Button
+                  variant={viewMode === "individual" ? "default" : "ghost"}
+                  size="sm"
+                  onClick={() => setViewMode("individual")}
+                  className="relative"
+                >
+                  <User className="h-4 w-4 mr-2" />
+                  Individual
+                  {individualCount > 0 && (
+                    <div className="absolute -top-1 -right-1 h-3 w-3 bg-red-500 rounded-full"></div>
+                  )}
+                </Button>
+                <Button
+                  variant={viewMode === "team" ? "default" : "ghost"}
+                  size="sm"
+                  onClick={() => setViewMode("team")}
+                  className="relative"
+                >
+                  <Users className="h-4 w-4 mr-2" />
+                  Team
+                  {teamCount > 0 && <div className="absolute -top-1 -right-1 h-3 w-3 bg-red-500 rounded-full"></div>}
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Requests Grid */}
+        <div className="grid gap-4">
+          {filteredRequests.length === 0 ? (
+            <Card>
+              <CardContent className="flex items-center justify-center py-12">
+                <div className="text-center">
+                  <CheckCircle className="h-12 w-12 text-green-500 mx-auto mb-4" />
+                  <h3 className="text-lg font-medium text-gray-900 mb-2">
+                    No Pending {viewMode === "individual" ? "Individual" : "Team"} Requests
+                  </h3>
+                  <p className="text-gray-500">
+                    All {viewMode === "individual" ? "individual" : "team"} accommodation requests have been processed.
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          ) : (
+            filteredRequests.map((request, index) => (
+              <Card key={index} className="hover:shadow-md transition-shadow">
+                <CardContent className="p-6">
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-4 mb-4">
+                        <div className="flex items-center">
+                          {request.bookingType === "team" ? (
+                            <Users className="h-5 w-5 text-blue-600 mr-2" />
+                          ) : (
+                            <User className="h-5 w-5 text-gray-600 mr-2" />
+                          )}
+                          <div>
+                            <h3 className="font-semibold text-gray-900">
+                              {request.bookingType === "team" ? "Team Booking" : request.user.name}
+                            </h3>
+                            <p className="text-sm text-gray-500">{request.user.email}</p>
+                          </div>
+                        </div>
+                        <Badge variant="outline">{request.user.role}</Badge>
+                      </div>
+
+                      <div className="grid md:grid-cols-3 gap-4 mb-4">
+                        <div className="flex items-center">
+                          <MapPin className="h-4 w-4 text-gray-400 mr-2" />
+                          <span className="text-sm">{request.city}</span>
+                        </div>
+                        <div className="flex items-center">
+                          <Calendar className="h-4 w-4 text-gray-400 mr-2" />
+                          <span className="text-sm">
+                            {format(new Date(request.dates.from), "MMM dd")} -{" "}
+                            {format(new Date(request.dates.to), "MMM dd")}
+                          </span>
+                        </div>
+                        <div className="flex items-center">
+                          <Clock className="h-4 w-4 text-gray-400 mr-2" />
+                          <span className="text-sm">
+                            {request.checkInTime} - {request.checkOutTime}
+                          </span>
+                        </div>
+                      </div>
+
+                      {request.bookingType === "team" && request.teamMembers && request.teamMembers.length > 0 && (
+                        <div className="mb-4">
+                          <p className="text-sm font-medium text-gray-700 mb-2">
+                            Team Members ({request.teamMembers.length}):
+                          </p>
+                          <div className="flex flex-wrap gap-2">
+                            {request.teamMembers.map((email: string, idx: number) => (
+                              <Badge key={idx} variant="outline" className="text-xs">
+                                {mockUsers.find((u) => u.email === email)?.name || email}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex gap-2">
+                      <Dialog>
+                        <DialogTrigger asChild>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              setSelectedRequest(request)
+                              setAssignedAccommodations({})
+                              setAccommodationTypes({})
+                              setRemarks("")
+                              setConflicts([])
+                            }}
+                          >
+                            Process
+                          </Button>
+                        </DialogTrigger>
+                        <DialogContent className="max-w-6xl max-h-[90vh]">
+                          <DialogHeader>
+                            <DialogTitle>Process Request</DialogTitle>
+                          </DialogHeader>
+
+                          {selectedRequest && (
+                            <div className="flex flex-col max-h-[calc(90vh-8rem)]">
+                              <div className="p-4 bg-gray-50 rounded-lg flex-shrink-0 mb-4">
+                                <h4 className="font-medium mb-2">Request Details</h4>
+                                <div className="grid grid-cols-2 gap-2 text-sm">
+                                  <div>
+                                    <strong>Requester:</strong> {selectedRequest.user.name}
+                                  </div>
+                                  <div>
+                                    <strong>Role:</strong> {selectedRequest.user.role}
+                                  </div>
+                                  <div>
+                                    <strong>City:</strong> {selectedRequest.city}
+                                  </div>
+                                  <div>
+                                    <strong>Type:</strong>{" "}
+                                    {selectedRequest.bookingType === "individual" ? "Individual" : "Team"}
+                                  </div>
+                                  <div>
+                                    <strong>Duration:</strong> {format(new Date(selectedRequest.dates.from), "MMM dd")}{" "}
+                                    - {format(new Date(selectedRequest.dates.to), "MMM dd")}
+                                  </div>
+                                </div>
+                              </div>
+
+                              {conflicts.length > 0 && (
+                                <Alert className="border-red-200 bg-red-50 flex-shrink-0 mb-4">
+                                  <AlertTriangle className="h-4 w-4 text-red-600" />
+                                  <AlertDescription className="text-red-800">
+                                    <div className="font-medium mb-1">Accommodation Conflicts Detected:</div>
+                                    <ul className="list-disc list-inside space-y-1">
+                                      {conflicts.map((conflict, idx) => (
+                                        <li key={idx} className="text-sm">
+                                          {conflict}
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  </AlertDescription>
+                                </Alert>
+                              )}
+
+                              <div className="flex-1 min-h-0">
+                                <h4 className="font-medium mb-4">Assign Accommodations</h4>
+                                <ScrollArea className="h-full pr-4">
+                                  <div className="space-y-4 pb-4">
+                                    {(() => {
+                                      const allPeople = [
+                                        {
+                                          email: selectedRequest.user.email,
+                                          name: selectedRequest.user.name,
+                                          role: selectedRequest.user.role,
+                                          isRequester: true,
+                                        },
+                                        ...(selectedRequest.teamMembers || []).map((email: string) => {
+                                          const user = mockUsers.find((u) => u.email === email)
+                                          return {
+                                            email,
+                                            name: user?.name || email,
+                                            role: user?.role || "Project Engineer",
+                                            isRequester: false,
+                                          }
+                                        }),
+                                      ]
+                                      const roleOrder = { Manager: 1, Senior: 2, "Project Engineer": 3 }
+                                      const sortedPeople = allPeople.sort(
+                                        (a, b) =>
+                                          (roleOrder[a.role as keyof typeof roleOrder] || 999) -
+                                          (roleOrder[b.role as keyof typeof roleOrder] || 999),
+                                      )
+                                      return sortedPeople.map((person, personIndex) => {
+                                        const personKey = `${person.email}_${personIndex}`
+                                        const currentType =
+                                          accommodationTypes[personKey] || getDefaultAccommodationType(person.role)
+                                        const availableAccommodations = availableAccommodationsMap[personKey] || []
+
+                                        return (
+                                          <Card key={personKey} className="p-4">
+                                            <div className="flex items-center justify-between mb-3">
+                                              <div>
+                                                <div className="font-medium">
+                                                  {person.name} {person.isRequester && "(Requester)"}
+                                                </div>
+                                                <div className="text-sm text-gray-500">{person.email}</div>
+                                                <Badge variant="outline" className="text-xs mt-1">
+                                                  {person.role}
+                                                </Badge>
+                                              </div>
+                                            </div>
+
+                                            <div className="grid grid-cols-2 gap-4">
+                                              <div>
+                                                <label className="text-sm font-medium mb-2 block">
+                                                  Accommodation Type
+                                                </label>
+                                                <Select
+                                                  value={currentType}
+                                                  onValueChange={(value) => {
+                                                    setAccommodationTypes((prev) => ({
+                                                      ...prev,
+                                                      [personKey]: value,
+                                                    }))
+                                                    setAssignedAccommodations((prev) => {
+                                                      const newAssignments = { ...prev }
+                                                      delete newAssignments[personKey]
+                                                      return newAssignments
+                                                    })
+                                                  }}
+                                                >
+                                                  <SelectTrigger>
+                                                    <SelectValue>{currentType}</SelectValue>
+                                                  </SelectTrigger>
+                                                  <SelectContent>
+                                                    <SelectItem value="flats">
+                                                      <div className="flex items-center">
+                                                        <Building2 className="h-4 w-4 mr-2" />
+                                                        Flats
+                                                      </div>
+                                                    </SelectItem>
+                                                    <SelectItem value="rooms">
+                                                      <div className="flex items-center">
+                                                        <Home className="h-4 w-4 mr-2" />
+                                                        Rooms
+                                                      </div>
+                                                    </SelectItem>
+                                                    <SelectItem value="beds">
+                                                      <div className="flex items-center">
+                                                        <Bed className="h-4 w-4 mr-2" />
+                                                        Beds
+                                                      </div>
+                                                    </SelectItem>
+                                                  </SelectContent>
+                                                </Select>
+                                              </div>
+                                              <div>
+                                                <label className="text-sm font-medium mb-2 block">
+                                                  Select {currentType.slice(0, -1)}
+                                                </label>
+                                                <Select
+                                                  value={assignedAccommodations[personKey] || ""}
+                                                  onValueChange={(value) => {
+                                                    setAssignedAccommodations((prev) => ({
+                                                      ...prev,
+                                                      [personKey]: value,
+                                                    }))
+                                                  }}
+                                                >
+                                                  <SelectTrigger>
+                                                    <SelectValue>
+                                                      {assignedAccommodations[personKey] ||
+                                                        `Select ${currentType.slice(0, -1)}`}
+                                                    </SelectValue>
+                                                  </SelectTrigger>
+                                                  <SelectContent>
+                                                    {availableAccommodations.map((apt) => (
+                                                      <div key={apt.apartment}>
+                                                        <div className="px-2 py-1 text-xs font-medium text-gray-500 bg-gray-100">
+                                                          {apt.apartment}
+                                                        </div>
+                                                        {apt.items.map((item) => (
+                                                          <SelectItem key={`${apt.apartment}-${item}`} value={item}>
+                                                            <div className="flex items-center pl-4">
+                                                              {currentType === "flats" && (
+                                                                <Building2 className="h-4 w-4 mr-2" />
+                                                              )}
+                                                              {currentType === "rooms" && (
+                                                                <Home className="h-4 w-4 mr-2" />
+                                                              )}
+                                                              {currentType === "beds" && (
+                                                                <Bed className="h-4 w-4 mr-2" />
+                                                              )}
+                                                              {item}
+                                                            </div>
+                                                          </SelectItem>
+                                                        ))}
+                                                      </div>
+                                                    ))}
+                                                    {availableAccommodations.length === 0 && (
+                                                      <SelectItem value="no-accommodation-available" disabled>
+                                                        No available {currentType}
+                                                      </SelectItem>
+                                                    )}
+                                                  </SelectContent>
+                                                </Select>
+                                              </div>
+                                            </div>
+                                          </Card>
+                                        )
+                                      })
+                                    })()}
+                                  </div>
+                                </ScrollArea>
+                              </div>
+                              <div className="flex-shrink-0 pt-4 border-t">
+                                <label className="text-sm font-medium mb-2 block">Remarks (Optional)</label>
+                                <Textarea
+                                  value={remarks}
+                                  onChange={(e) => setRemarks(e.target.value)}
+                                  placeholder="Add any remarks or special instructions..."
+                                  rows={3}
+                                />
+                              </div>
+                              <div className="flex gap-2 pt-4 border-t flex-shrink-0">
+                                <Button
+                                  onClick={handleApprove}
+                                  disabled={
+                                    Object.keys(assignedAccommodations).length === 0 || loading || conflicts.length > 0
+                                  }
+                                  className="flex-1"
+                                >
+                                  <CheckCircle className="h-4 w-4 mr-2" />
+                                  {loading ? "Processing..." : "Approve"}
+                                </Button>
+                                <Button
+                                  onClick={handleReject}
+                                  disabled={loading}
+                                  className="flex-1"
+                                  variant="destructive"
+                                >
+                                  Reject
+                                </Button>
+                              </div>
+                            </div>
+                          )}
+                        </DialogContent>
+                      </Dialog>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}

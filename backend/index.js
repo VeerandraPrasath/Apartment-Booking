@@ -64,11 +64,48 @@ app.get("/auth/callback", async (req, res) => {
     const user = userResponse.data;
 
     // Step 4: Redirect to frontend with user info
-    const name = encodeURIComponent(user.displayName);
-const email = encodeURIComponent(user.mail || user.userPrincipalName);
-const jobTitle = encodeURIComponent(user.jobTitle || "Not specified");
-const gender = encodeURIComponent(user.gender || "Not specified");
-res.redirect(`${FRONTEND_URL}/booking?name=${name}&email=${email}&jobTitle=${jobTitle}&id=2`);
+const name = user.displayName;
+const email = user.mail || user.userPrincipalName;
+const jobTitle = user.jobTitle || "Not specified";
+let userId;
+try {
+  // Check if user exists
+  const userCheck = await pool.query(
+    'SELECT * FROM users WHERE email = $1',
+    [email]
+  );
+
+  if (userCheck.rows.length === 0) {
+    // Insert new user
+   const insertResult = await pool.query(
+  'INSERT INTO users (name, email, role) VALUES ($1, $2, $3) RETURNING id',
+  [name, email, jobTitle]
+);
+userId = insertResult.rows[0].id;
+
+
+    console.log("✅ New user created:", name);
+  }
+  else {
+    userId=userCheck.rows[0].id;
+    console.log("✅ User already exists:", userCheck.rows[0].name);
+  }
+} catch (dbErr) {
+  console.error("❌ DB User Error:", dbErr.message);
+  return res.status(500).send("User creation failed");
+}
+
+// Redirect to frontend
+const nameEnc = encodeURIComponent(name);
+const emailEnc = encodeURIComponent(email);
+const jobTitleEnc = encodeURIComponent(jobTitle);
+
+if (email === 'veerandra.prasath@solitontech.com') {
+  res.redirect(`${FRONTEND_URL}/admin/requests?name=${nameEnc}&email=${emailEnc}&jobTitle=${jobTitleEnc}&id=${userId}`);
+} else {
+  res.redirect(`${FRONTEND_URL}/booking?name=${nameEnc}&email=${emailEnc}&jobTitle=${jobTitleEnc}&id=${userId}`);
+}
+
 // res.status(200).json({name : user.displayName, email: user.mail || user.userPrincipalName, jobTitle: user.jobTitle || "Not specified"});
   } catch (err) {
     console.error("❌ Auth Error:", err.response?.data || err.message);
@@ -95,7 +132,7 @@ app.use('/api/apartments', apartmentRoutes);
 app.use('/api/flats', flatRoutes);
 app.use('/api/rooms',roomRoutes)
 app.use('/api/occupancy',occupancyRoutes);
-// app.use('api/availability',availabilityRoutes)
+// app.use('/api/availability',availabilityRoutes)
 app.use('/api/bookings',bookingRoutes)
 app.use('/api/requests',historiesRoute)
 app.use('/api/accommodation',accommodationsRoute)

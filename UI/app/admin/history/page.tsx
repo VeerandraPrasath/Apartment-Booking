@@ -1,5 +1,5 @@
 "use client"
-
+ 
 import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -12,72 +12,55 @@ import { format } from "date-fns"
 import Link from "next/link"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { ScrollArea } from "@/components/ui/scroll-area"
-
-const mockUsers = [
-  { email: "john.doe@example.com", name: "John Doe", role: "Manager" },
-  { email: "jane.smith@example.com", name: "Jane Smith", role: "Senior" },
-  { email: "peter.jones@example.com", name: "Peter Jones", role: "Project Engineer" },
-  { email: "mike.johnson@example.com", name: "Mike Johnson", role: "Project Engineer" },
-  { email: "sarah.wilson@example.com", name: "Sarah Wilson", role: "Manager" },
-]
-
+ 
+ 
+import { fetchHistoryRequests, fetchCities } from "@/lib/api"
+ 
+ 
 export default function AdminHistoryPage() {
-  const [allRequests, setAllRequests] = useState<any[]>([])
-  const [filteredRequests, setFilteredRequests] = useState<any[]>([])
+  const [requests, setRequests] = useState<any[]>([])
   const [filterCity, setFilterCity] = useState("all")
   const [filterStatus, setFilterStatus] = useState("all")
   const [filterRole, setFilterRole] = useState("all")
   const [searchTerm, setSearchTerm] = useState("")
   const [dateFrom, setDateFrom] = useState("")
   const [dateTo, setDateTo] = useState("")
-
+  const [cities, setCities] = useState<string[]>([])
+  const [roles, setRoles] = useState<string[]>([])
+ 
+  // Fetch cities for filter dropdown
   useEffect(() => {
-    // TODO: Replace with API call
-    // const response = await fetch('/api/requests/history')
-    // const data = await response.json()
-
-    // Load all requests from localStorage
-    const storedRequests = JSON.parse(localStorage.getItem("accommodationRequests") || "[]")
-    const processedRequests = storedRequests.filter((req: any) => req.status)
-    setAllRequests(processedRequests)
-    setFilteredRequests(processedRequests)
+    fetchCities()
+      .then((data) => {
+        if (Array.isArray(data)) {
+          setCities(data.map((c: any) => c.name))
+        }
+      })
+      .catch(() => setCities([]))
   }, [])
-
+ 
+  // Fetch requests from API when filters change
   useEffect(() => {
-    // Apply filters
-    let filtered = allRequests
-
-    if (filterCity !== "all") {
-      filtered = filtered.filter((req) => req.city === filterCity)
-    }
-
-    if (filterStatus !== "all") {
-      filtered = filtered.filter((req) => req.status === filterStatus)
-    }
-
-    if (filterRole !== "all") {
-      filtered = filtered.filter((req) => req.user.role === filterRole)
-    }
-
-    if (searchTerm) {
-      filtered = filtered.filter(
-        (req) =>
-          req.user.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          req.user.email.toLowerCase().includes(searchTerm.toLowerCase()),
-      )
-    }
-
-    if (dateFrom) {
-      filtered = filtered.filter((req) => new Date(req.dates.from) >= new Date(dateFrom))
-    }
-
-    if (dateTo) {
-      filtered = filtered.filter((req) => new Date(req.dates.to) <= new Date(dateTo))
-    }
-
-    setFilteredRequests(filtered)
-  }, [allRequests, filterCity, filterStatus, filterRole, searchTerm, dateFrom, dateTo])
-
+    fetchHistoryRequests({
+      city: filterCity !== "all" ? filterCity : undefined,
+      status: filterStatus !== "all" ? filterStatus : undefined,
+      role: filterRole !== "all" ? filterRole : undefined,
+      search: searchTerm || undefined,
+      dateFrom: dateFrom || undefined,
+      dateTo: dateTo || undefined,
+    })
+      .then((data) => {
+        setRequests(data)
+        // Set roles for filter dropdown
+        const uniqueRoles = Array.from(new Set(data.map((req: any) => req.user?.role).filter(Boolean)))
+        setRoles(uniqueRoles as string[])
+      })
+      .catch(() => {
+        setRequests([])
+        setRoles([])
+      })
+  }, [filterCity, filterStatus, filterRole, searchTerm, dateFrom, dateTo])
+ 
   const exportToExcel = () => {
     // TODO: Replace with API call
     // const response = await fetch('/api/requests/history/export', {
@@ -85,7 +68,7 @@ export default function AdminHistoryPage() {
     //   headers: { 'Content-Type': 'application/json' },
     //   body: JSON.stringify({ filters: { city: filterCity, status: filterStatus, role: filterRole, search: searchTerm, dateFrom, dateTo } })
     // })
-
+ 
     const csvContent = [
       [
         "Request Date",
@@ -122,7 +105,7 @@ export default function AdminHistoryPage() {
     ]
       .map((row) => row.join(","))
       .join("\n")
-
+ 
     const blob = new Blob([csvContent], { type: "text/csv" })
     const url = window.URL.createObjectURL(blob)
     const a = document.createElement("a")
@@ -131,7 +114,7 @@ export default function AdminHistoryPage() {
     a.click()
     window.URL.revokeObjectURL(url)
   }
-
+ 
   const clearFilters = () => {
     setFilterCity("all")
     setFilterStatus("all")
@@ -140,14 +123,13 @@ export default function AdminHistoryPage() {
     setDateFrom("")
     setDateTo("")
   }
-
-  const cities = [...new Set(allRequests.map((req) => req.city))]
-  const roles = [...new Set(allRequests.map((req) => req.user.role))]
-
+ 
+ 
+  const filteredRequests = requests;
   const approvedCount = filteredRequests.filter((req) => req.status === "approved").length
   const rejectedCount = filteredRequests.filter((req) => req.status === "rejected").length
   const teamBookingsCount = filteredRequests.filter((req) => req.bookingType === "team").length
-
+ 
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="container mx-auto px-4 py-6">
@@ -169,7 +151,7 @@ export default function AdminHistoryPage() {
             </Link>
           </div>
         </div>
-
+ 
         {/* Stats Cards */}
         <div className="grid md:grid-cols-4 gap-4 mb-6">
           <Card>
@@ -183,7 +165,7 @@ export default function AdminHistoryPage() {
               </div>
             </CardContent>
           </Card>
-
+ 
           <Card>
             <CardContent className="p-4">
               <div className="flex items-center">
@@ -197,7 +179,7 @@ export default function AdminHistoryPage() {
               </div>
             </CardContent>
           </Card>
-
+ 
           <Card>
             <CardContent className="p-4">
               <div className="flex items-center">
@@ -211,7 +193,7 @@ export default function AdminHistoryPage() {
               </div>
             </CardContent>
           </Card>
-
+ 
           <Card>
             <CardContent className="p-4">
               <div className="flex items-center">
@@ -224,7 +206,7 @@ export default function AdminHistoryPage() {
             </CardContent>
           </Card>
         </div>
-
+ 
         {/* Filters */}
         <Card className="mb-6">
           <CardHeader>
@@ -258,7 +240,7 @@ export default function AdminHistoryPage() {
                   />
                 </div>
               </div>
-
+ 
               <div>
                 <label className="text-sm font-medium mb-2 block">City</label>
                 <Select value={filterCity} onValueChange={setFilterCity}>
@@ -275,7 +257,7 @@ export default function AdminHistoryPage() {
                   </SelectContent>
                 </Select>
               </div>
-
+ 
               <div>
                 <label className="text-sm font-medium mb-2 block">Status</label>
                 <Select value={filterStatus} onValueChange={setFilterStatus}>
@@ -289,7 +271,7 @@ export default function AdminHistoryPage() {
                   </SelectContent>
                 </Select>
               </div>
-
+ 
               <div>
                 <label className="text-sm font-medium mb-2 block">Role</label>
                 <Select value={filterRole} onValueChange={setFilterRole}>
@@ -306,12 +288,12 @@ export default function AdminHistoryPage() {
                   </SelectContent>
                 </Select>
               </div>
-
+ 
               <div>
                 <label className="text-sm font-medium mb-2 block">From Date</label>
                 <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
               </div>
-
+ 
               <div>
                 <label className="text-sm font-medium mb-2 block">To Date</label>
                 <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
@@ -319,7 +301,7 @@ export default function AdminHistoryPage() {
             </div>
           </CardContent>
         </Card>
-
+ 
         {/* History Table */}
         <Card>
           <CardHeader>
@@ -401,7 +383,7 @@ export default function AdminHistoryPage() {
                             </Badge>
                           </TableCell>
                           <TableCell className="text-sm">
-                            {request.assignedAccommodations ? (
+                            {request.assignedAccommodations && Object.keys(request.assignedAccommodations).length > 0 ? (
                               request.bookingType === "team" ? (
                                 <Dialog>
                                   <DialogTrigger asChild>
@@ -417,18 +399,19 @@ export default function AdminHistoryPage() {
                                       <div className="space-y-3">
                                         {Object.entries(request.assignedAccommodations).map(
                                           ([email, accommodation]) => {
-                                            // First check if it's the requester
-                                            let user = null
+                                            let user = null;
                                             if (email === request.user.email) {
-                                              user = request.user
-                                            } else {
-                                              // Then check team members
-                                              user = mockUsers.find((u) => u.email === email)
+                                              user = request.user;
                                             }
-
-                                            // Fallback if user not found
                                             if (!user) {
-                                              user = { name: email, role: "Unknown" }
+                                              user = { name: email, role: "Unknown" };
+                                            }
+                                            // Format accommodation as string if it's an object
+                                            let accString = "Not assigned";
+                                            if (typeof accommodation === "string") {
+                                              accString = accommodation || "Not assigned";
+                                            } else if (accommodation && typeof accommodation === "object") {
+                                              accString = Object.values(accommodation).filter(Boolean).join(" > ") || "Not assigned";
                                             }
                                             return (
                                               <div
@@ -443,11 +426,11 @@ export default function AdminHistoryPage() {
                                                   </Badge>
                                                 </div>
                                                 <div className="font-mono text-sm bg-white px-2 py-1 rounded border">
-                                                  {accommodation}
+                                                  {accString}
                                                 </div>
                                               </div>
-                                            )
-                                          },
+                                            );
+                                          }
                                         )}
                                       </div>
                                     </ScrollArea>
@@ -455,7 +438,13 @@ export default function AdminHistoryPage() {
                                 </Dialog>
                               ) : (
                                 <div className="font-mono text-sm">
-                                  {Object.values(request.assignedAccommodations)[0]}
+                                  {(() => {
+                                    const acc = Object.values(request.assignedAccommodations)[0];
+                                    if (!acc) return "Not assigned";
+                                    if (typeof acc === "string") return acc;
+                                    if (typeof acc === "object") return Object.values(acc).filter(Boolean).join(" > ") || "Not assigned";
+                                    return String(acc);
+                                  })()}
                                 </div>
                               )
                             ) : (
@@ -486,3 +475,4 @@ export default function AdminHistoryPage() {
     </div>
   )
 }
+ 

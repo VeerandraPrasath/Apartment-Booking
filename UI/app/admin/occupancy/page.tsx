@@ -1,6 +1,6 @@
 "use client"
-
-import { useState } from "react"
+ 
+import { useEffect, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -10,81 +10,84 @@ import { Building2, Home, User, Download, Filter } from "lucide-react"
 import { format } from "date-fns"
 import Link from "next/link"
 import { ScrollArea } from "@/components/ui/scroll-area"
-
-// Mock occupancy data
-const mockOccupancy = [
-  {
-    apartment: "Pricol",
-    flat: "C4",
-    room: "R1",
-    bed: "B1",
-    occupant: "John Doe",
-    checkIn: "2025-07-15",
-    checkOut: "2025-07-20",
-    status: "occupied",
-    role: "Manager",
-  },
-  {
-    apartment: "Pricol",
-    flat: "C4",
-    room: "R1",
-    bed: "B2",
-    occupant: "Mike Johnson",
-    checkIn: "2025-07-16",
-    checkOut: "2025-07-22",
-    status: "occupied",
-    role: "Project Engineer",
-  },
-  {
-    apartment: "Pricol",
-    flat: "C4",
-    room: "R2",
-    bed: "B1",
-    occupant: null,
-    checkIn: null,
-    checkOut: null,
-    status: "available",
-    role: null,
-  },
-  {
-    apartment: "Pricol",
-    flat: "C6",
-    room: "R1",
-    bed: "B1",
-    occupant: "Jane Smith",
-    checkIn: "2025-07-14",
-    checkOut: "2025-07-19",
-    status: "occupied",
-    role: "Senior",
-  },
-  {
-    apartment: "Sreevatsa Srilakshmi",
-    flat: "A-13",
-    room: "R1",
-    bed: "B1",
-    occupant: "Sarah Wilson",
-    checkIn: "2025-07-17",
-    checkOut: "2025-07-25",
-    status: "occupied",
-    role: "Manager",
-  },
-]
-
+import { fetchOccupancyData, fetchCities, fetchApartmentsByCityId } from "@/lib/api"
+ 
+type OccupancyItem = {
+  apartment: string
+  flat: string
+  room: string
+  bed: string
+  occupant: string | null
+  checkIn: string | null
+  checkOut: string | null
+  status: string
+  role: string | null
+}
+ 
 export default function AdminOccupancyPage() {
-  const [occupancyData, setOccupancyData] = useState(mockOccupancy)
+  const [occupancyData, setOccupancyData] = useState<OccupancyItem[]>([])
   const [filterCity, setFilterCity] = useState("all")
   const [filterStatus, setFilterStatus] = useState("all")
   const [filterApartment, setFilterApartment] = useState("all")
-
-  const cities = ["Coimbatore", "Chennai", "Bangalore"]
-  const apartments = [...new Set(occupancyData.map((item) => item.apartment))]
-
-  const filteredData = occupancyData.filter((item) => {
-    if (filterStatus !== "all" && item.status !== filterStatus) return false
-    if (filterApartment !== "all" && item.apartment !== filterApartment) return false
-    return true
-  })
-
+  const [cities, setCities] = useState<{ id: string; name: string }[]>([])
+  const [apartments, setApartments] = useState<string[]>([])
+ 
+  // Fetch cities on mount
+  useEffect(() => {
+    fetchCities()
+      .then((data) => {
+        if (Array.isArray(data)) {
+          setCities(data.map((c: any) => ({ id: String(c.id), name: c.name })))
+        }
+      })
+      .catch(() => setCities([]))
+  }, [])
+ 
+  // Fetch apartments for selected city (by city ID) and reset apartment filter
+  useEffect(() => {
+    if (filterCity !== "all") {
+      setFilterApartment("all");
+      const cityObj = cities.find((c) => c.name === filterCity);
+      if (cityObj) {
+        fetchApartmentsByCityId(cityObj.id)
+          .then((data) => {
+            // The grouped endpoint returns an object with city name as key
+            const cityKey = Object.keys(data)[0];
+            if (cityKey && Array.isArray(data[cityKey])) {
+              setApartments(data[cityKey].map((apt: any) => apt.name));
+            } else {
+              setApartments([]);
+            }
+          })
+          .catch(() => setApartments([]));
+      } else {
+        setApartments([]);
+      }
+    } else {
+      setFilterApartment("all");
+      setApartments([]);
+    }
+  }, [filterCity, cities])
+ 
+  // Fetch occupancy data when filters change
+  useEffect(() => {
+    fetchOccupancyData({
+      city: filterCity !== "all" ? filterCity : undefined,
+      apartment: filterApartment !== "all" ? filterApartment : undefined,
+      is_booked:
+        filterStatus === "occupied"
+          ? true
+          : filterStatus === "available"
+          ? false
+          : undefined,
+    })
+      .then((data) => setOccupancyData(data))
+      .catch(() => setOccupancyData([]))
+  }, [filterCity, filterApartment, filterStatus])
+ 
+ 
+  const filteredData = occupancyData // Already filtered from API
+ 
   const exportToExcel = () => {
     // TODO: Replace with API call
     // const response = await fetch('/api/occupancy/export', {
@@ -92,7 +95,7 @@ export default function AdminOccupancyPage() {
     //   headers: { 'Content-Type': 'application/json' },
     //   body: JSON.stringify({ filters: { city: filterCity, status: filterStatus, apartment: filterApartment } })
     // })
-
+ 
     const csvContent = [
       ["Apartment", "Flat", "Room", "Bed", "Occupant", "Check-in", "Check-out", "Status", "Role"],
       ...filteredData.map((item) => [
@@ -109,7 +112,7 @@ export default function AdminOccupancyPage() {
     ]
       .map((row) => row.join(","))
       .join("\n")
-
+ 
     const blob = new Blob([csvContent], { type: "text/csv" })
     const url = window.URL.createObjectURL(blob)
     const a = document.createElement("a")
@@ -118,20 +121,19 @@ export default function AdminOccupancyPage() {
     a.click()
     window.URL.revokeObjectURL(url)
   }
-
+ 
+ 
   const getStatusColor = (status: string) => {
     switch (status) {
       case "occupied":
         return "bg-red-100 text-red-800"
       case "available":
         return "bg-green-100 text-green-800"
-      case "maintenance":
-        return "bg-yellow-100 text-yellow-800"
       default:
         return "bg-gray-100 text-gray-800"
     }
   }
-
+ 
   const getRoleColor = (role: string) => {
     switch (role) {
       case "Manager":
@@ -144,11 +146,12 @@ export default function AdminOccupancyPage() {
         return "bg-gray-100 text-gray-800"
     }
   }
-
+ 
+ 
   const occupiedCount = filteredData.filter((item) => item.status === "occupied").length
   const availableCount = filteredData.filter((item) => item.status === "available").length
   const totalCount = filteredData.length
-
+ 
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="container mx-auto px-4 py-6">
@@ -167,7 +170,7 @@ export default function AdminOccupancyPage() {
             </Link>
           </div>
         </div>
-
+ 
         {/* Stats Cards */}
         <div className="grid md:grid-cols-4 gap-4 mb-6">
           <Card>
@@ -181,7 +184,7 @@ export default function AdminOccupancyPage() {
               </div>
             </CardContent>
           </Card>
-
+ 
           <Card>
             <CardContent className="p-4">
               <div className="flex items-center">
@@ -193,7 +196,7 @@ export default function AdminOccupancyPage() {
               </div>
             </CardContent>
           </Card>
-
+ 
           <Card>
             <CardContent className="p-4">
               <div className="flex items-center">
@@ -205,7 +208,7 @@ export default function AdminOccupancyPage() {
               </div>
             </CardContent>
           </Card>
-
+ 
           <Card>
             <CardContent className="p-4">
               <div className="flex items-center">
@@ -224,7 +227,7 @@ export default function AdminOccupancyPage() {
             </CardContent>
           </Card>
         </div>
-
+ 
         {/* Filters and Export */}
         <Card className="mb-6">
           <CardHeader>
@@ -250,14 +253,14 @@ export default function AdminOccupancyPage() {
                   <SelectContent>
                     <SelectItem value="all">All Cities</SelectItem>
                     {cities.map((city) => (
-                      <SelectItem key={city} value={city}>
-                        {city}
+                      <SelectItem key={city.id} value={city.name}>
+                        {city.name}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
-
+ 
               <div>
                 <label className="text-sm font-medium mb-2 block">Apartment</label>
                 <Select value={filterApartment} onValueChange={setFilterApartment}>
@@ -274,7 +277,7 @@ export default function AdminOccupancyPage() {
                   </SelectContent>
                 </Select>
               </div>
-
+ 
               <div>
                 <label className="text-sm font-medium mb-2 block">Status</label>
                 <Select value={filterStatus} onValueChange={setFilterStatus}>
@@ -285,14 +288,13 @@ export default function AdminOccupancyPage() {
                     <SelectItem value="all">All Status</SelectItem>
                     <SelectItem value="occupied">Occupied</SelectItem>
                     <SelectItem value="available">Available</SelectItem>
-                    <SelectItem value="maintenance">Maintenance</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
             </div>
           </CardContent>
         </Card>
-
+ 
         {/* Occupancy Table */}
         <Card>
           <CardHeader>
@@ -369,3 +371,4 @@ export default function AdminOccupancyPage() {
     </div>
   )
 }
+ 

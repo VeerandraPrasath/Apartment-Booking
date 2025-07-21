@@ -12,6 +12,8 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Calendar, MapPin, User, Users, Clock, CheckCircle, Home, Bed, Building2, AlertTriangle } from "lucide-react"
 import { format } from "date-fns"
 import Link from "next/link"
+import { useSearchParams, useRouter } from "next/navigation"
+// ...other imports...
 
 const getDefaultAccommodationType = (role: string) => {
   switch (role) {
@@ -61,6 +63,13 @@ const checkForConflicts = (assignedAccommodations: { [key: string]: string }) =>
 }
 
 export default function AdminRequestsPage() {
+
+  const searchParams = useSearchParams()
+  const router = useRouter()
+  const name = searchParams.get("name")
+  const email = searchParams.get("email")
+  const jobTitle = searchParams.get("jobTitle")
+  
   const [requests, setRequests] = useState<any[]>([])
   const [selectedRequest, setSelectedRequest] = useState<any>(null)
   const [assignedAccommodations, setAssignedAccommodations] = useState<{ [key: string]: string }>({})
@@ -72,6 +81,24 @@ export default function AdminRequestsPage() {
   const [conflicts, setConflicts] = useState<string[]>([])
   const [mockUsers, setUsers] = useState<{ id: number; name: string; email: string; role: string }[]>([])
   const [availableAccommodationsMap, setAvailableAccommodationsMap] = useState<{ [key: string]: any[] }>({})
+
+useEffect(() => {
+    if (!name || !email || !jobTitle) {
+      // Redirect to login or show error
+      router.replace("/") // or any other route you want
+    }
+  }, [name, email, jobTitle, router])
+
+  if (!name || !email || !jobTitle) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <h2 className="text-xl font-bold text-red-600 mb-2">Access Denied</h2>
+          <p className="text-gray-700">Missing required authentication details. Please login again.</p>
+        </div>
+      </div>
+    )
+  }
 
   useEffect(() => {
     loadPendingRequests()
@@ -177,19 +204,31 @@ export default function AdminRequestsPage() {
     }
   }
 
-  const getAvailableAccommodations = async (
+const getAvailableAccommodations = async (
   cityId: number,
   type: string,
   assignedAccommodations: { [key: string]: string }
 ) => {
   console.log("Fetching accommodations for city:", cityId, "type:", type)
   try {
-    const response = await fetch(`http://localhost:5001/api/cities/${cityId}/accommodations`)
+    const response = await fetch(`http://localhost:5001/api/cities/${cityId}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+       
+        fromDate:selectedRequest?.dates?.from,
+        toDate: selectedRequest?.dates?.to
+        
+      }),
+    })
+
     const data = await response.json()
     if (!data.success || !Array.isArray(data.apartments)) return []
-      setAccommodationTreeByCity(data)
-    console.log("Fetched accommodations:", data.apartments)
-    console.log("Assigned accommodations:", assignedAccommodations)
+   console.log("Available accommodations data:", data)
+    setAccommodationTreeByCity(data)
+
     const assignedItems = Object.values(assignedAccommodations)
     const accommodations: { apartment: string; items: string[] }[] = []
 
@@ -241,6 +280,7 @@ export default function AdminRequestsPage() {
   }
 }
 
+
   const handleApprove = async () => {
   if (!selectedRequest || Object.keys(assignedAccommodations).length === 0) return
   if (conflicts.length > 0) {
@@ -250,7 +290,10 @@ export default function AdminRequestsPage() {
   try {
     setLoading(true)
     // Build assignedAccommodations array for API
+
+   
     const allPeople = [
+     
       {
         email: selectedRequest.user.email,
         name: selectedRequest.user.name,
@@ -390,29 +433,46 @@ function getBedIdByName(flatName: string, roomName: string, bedName: string) {
 }
 
   const handleReject = async () => {
-    if (!selectedRequest) return
-    try {
-      setLoading(true)
-      // TODO: Replace with API call
-      // const response = await fetch(`/api/requests/${selectedRequest.timestamp}/reject`, {...})
-      const allRequests = JSON.parse(localStorage.getItem("accommodationRequests") || "[]")
-      const updatedAllRequests = allRequests.map((req: any) =>
-        req.timestamp === selectedRequest.timestamp
-          ? { ...req, status: "rejected", remarks, processedAt: new Date().toISOString() }
-          : req,
-      )
-      localStorage.setItem("accommodationRequests", JSON.stringify(updatedAllRequests))
-      await loadPendingRequests()
-      setSelectedRequest(null)
-      setRemarks("")
-      alert("Request rejected successfully!")
-    } catch (error) {
-      console.error("Error rejecting request:", error)
-      alert("Error rejecting request. Please try again.")
-    } finally {
-      setLoading(false)
+  if (!selectedRequest) return;
+
+  try {
+    setLoading(true);
+
+    const response = await fetch(`http://localhost:5001/api/requests/${selectedRequest.id}/reject`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        remarks,
+        assigned_by: null// optional, remove if not needed
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error("API call failed");
     }
+
+    const result = await response.json();
+
+    // Update the specific request in localStorage using the response
+    const allRequests = JSON.parse(localStorage.getItem("accommodationRequests") || "[]");
+    const updatedAllRequests = allRequests.map((req: any) =>
+      req.id === result.request.id ? { ...req, ...result.request, processedAt: new Date().toISOString() } : req
+    );
+    // localStorage.setItem("accommodationRequests", JSON.stringify(updatedAllRequests));
+
+    await loadPendingRequests(); // reload from backend/local
+    setSelectedRequest(null);
+    setRemarks("");
+    alert(result.message || "Request rejected successfully!");
+  } catch (error) {
+    console.error("Error rejecting request:", error);
+    alert("Error rejecting request. Please try again.");
+  } finally {
+    setLoading(false);
   }
+};
 
   const filteredRequests = requests.filter((req) => {
     if (viewMode === "individual") {

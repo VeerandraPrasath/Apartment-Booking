@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS beds (
 CREATE TABLE IF NOT EXISTS requests (
     id SERIAL PRIMARY KEY,
     user_id INT REFERENCES users(id) ON DELETE CASCADE,
-    city_id INT REFERENCES cities(id),
+    city_id INT REFERENCES cities(id) ON DELETE CASCADE,
     status request_status DEFAULT 'pending',
     booking_type booking_type DEFAULT 'individual',
     remarks TEXT,
@@ -66,7 +66,8 @@ CREATE TABLE IF NOT EXISTS requests (
     check_in TIMESTAMP,
     check_out TIMESTAMP,
     booking_for VARCHAR(100), -- added to track who the booking is for (only for individual)
-    processed_at TIMESTAMP
+    processed_at TIMESTAMP,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 8. TEAM MEMBERS

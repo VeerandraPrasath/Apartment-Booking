@@ -178,24 +178,22 @@ export const getApartmentsByCityIdGrouped = async (req, res) => {
         f.id AS flat_id,
         f.name AS door_number,
         f.is_booked,
-        f.role AS blocked_by,
         (
           SELECT COUNT(*) FROM rooms r WHERE r.flat_id = f.id
         ) AS room_count,
         (
-          SELECT COUNT(*) FROM cottages cot
+          SELECT COUNT(*) FROM beds cot
           JOIN rooms r ON cot.room_id = r.id
           WHERE r.flat_id = f.id
         ) AS bed_count,
         cot.id AS cottage_id,
         cot.name AS cottage_name,
-        cot.is_booked AS cottage_booked,
-        cot.role AS cottage_blocked_by
+        cot.is_booked AS cottage_booked
       FROM cities c
       JOIN apartments a ON a.city_id = c.id
       JOIN flats f ON f.apartment_id = a.id
       LEFT JOIN rooms r ON r.flat_id = f.id
-      LEFT JOIN cottages cot ON cot.room_id = r.id
+      LEFT JOIN beds cot ON cot.room_id = r.id
       WHERE c.id = $1
       ORDER BY c.name, a.name, f.name;
     `, [cityId]);

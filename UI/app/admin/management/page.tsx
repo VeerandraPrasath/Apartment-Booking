@@ -11,7 +11,19 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Building2, Plus, Upload, Download, Edit, Trash2, Home, Bed, MapPin, ExternalLink, Minus } from "lucide-react"
 import Link from "next/link"
-import { fetchAccommodationHierarchy } from "@/lib/api"
+import { fetchAccommodationHierarchy,deleteCityApi,createApartmentApi } from "@/lib/api"
+
+type Flat = {
+  id: number;
+  name: string;
+  apartmentId: number;
+};
+
+type Apartment = {
+  id: number;
+  name: string;
+  flats?: Flat[];
+};
 
 const defaultHierarchy = {
  cities: [
@@ -77,8 +89,8 @@ export default function AdminManagementPage() {
         setLoading(true)
         const hierarchy1 = await fetchAccommodationHierarchy()
         setHierarchy(hierarchy1)
-        console.log("Fetched hierarchy:", hierarchy1)
-        localStorage.setItem("accommodationHierarchy", JSON.stringify(hierarchy))
+        // console.log("Fetched hierarchy:", hierarchy1)
+        // localStorage.setItem("accommodationHierarchy", JSON.stringify(hierarchy))
       } catch (error) {
         // fallback logic...
       } finally {
@@ -89,63 +101,79 @@ export default function AdminManagementPage() {
   }, [])
 
   const saveHierarchy = (newHierarchy: any) => {
-    // try {
-    //   localStorage.setItem("accommodationHierarchy", JSON.stringify(newHierarchy))
-    //   setHierarchy(newHierarchy)
-    // } catch (error) {
-    //   console.error("Error saving hierarchy:", error)
-    //   alert("Error saving data. Please try again.")
-    // }
+ 
+      setHierarchy(newHierarchy)
+
   }
 
   // City CRUD
-  const handleAddCity = () => {
-    // if (!newItemName.trim()) return
-    // try {
-    //   const newCity = { id: Date.now(), name: newItemName.trim() }
-    //   const updatedHierarchy = { ...hierarchy, cities: [...(hierarchy.cities || []), newCity] }
-    //   saveHierarchy(updatedHierarchy)
-    //   setNewItemName("")
-    // } catch (error) {
-    //   console.error("Error adding city:", error)
-    //   alert("Error adding city. Please try again.")
-    // }
+  const handleAddCity = async () => {
+  if (!newItemName.trim()) return
+  try {
+    const response = await fetch("http://localhost:5001/api/cities", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: newItemName.trim() }),
+    })
+    if (!response.ok) throw new Error("Failed to add city")
+    const data = await response.json()
+    if (!data.success) throw new Error("Server did not return success")
+    console.log("New city added:", data.city)
+    const newCity = data.city
+    const updatedHierarchy = { ...hierarchy, cities: [...(hierarchy.cities || []), newCity] }
+    saveHierarchy(updatedHierarchy)
+    setNewItemName("")
+  } catch (error) {
+    console.error("Error adding city:", error)
+    alert("Error adding city. Please try again.")
   }
+}
 
-  const handleDeleteCity = (cityId: number) => {
-    // if (!confirm("Are you sure you want to delete this city and all its data?")) return
-    // try {
-    //   const updatedHierarchy = {
-    //     ...hierarchy,
-    //     cities: (hierarchy.cities || []).filter((city) => city.id !== cityId),
-    //     apartments: (hierarchy.apartments || []).filter((apt) => apt.cityId !== cityId),
-    //     flats: (hierarchy.flats || []).filter((flat) => {
-    //       const apartment = (hierarchy.apartments || []).find((apt) => apt.id === flat.apartmentId)
-    //       return apartment?.cityId !== cityId
-    //     }),
-    //     rooms: (hierarchy.rooms || []).filter((room) => {
-    //       const flat = (hierarchy.flats || []).find((f) => f.id === room.flatId)
-    //       const apartment = (hierarchy.apartments || []).find((apt) => apt.id === flat?.apartmentId)
-    //       return apartment?.cityId !== cityId
-    //     }),
-    //     beds: (hierarchy.beds || []).filter((bed) => {
-    //       const room = (hierarchy.rooms || []).find((r) => r.id === bed.roomId)
-    //       const flat = (hierarchy.flats || []).find((f) => f.id === room?.flatId)
-    //       const apartment = (hierarchy.apartments || []).find((apt) => apt.id === flat?.apartmentId)
-    //       return apartment?.cityId !== cityId
-    //     }),
-    //   }
-    //   saveHierarchy(updatedHierarchy)
-    //   if (selectedCity?.id === cityId) {
-    //     setSelectedCity(null)
-    //     setSelectedApartment(null)
-    //     setSelectedFlat(null)
-    //   }
-    // } catch (error) {
-    //   console.error("Error deleting city:", error)
-    //   alert("Error deleting city. Please try again.")
-    // }
+  async function handleDeleteCity(cityId: number) {
+  if (!confirm("Are you sure you want to delete this city and all its data?")) return;
+
+  try {
+    const success = await deleteCityApi(cityId);
+    if (!success) {
+      alert("Server did not confirm deletion. Please refresh and try again.");
+      return;
+    }
+
+    // Server delete succeeded — now update local hierarchy.
+    const updatedHierarchy = {
+      ...hierarchy,
+      cities: (hierarchy.cities || []).filter((city) => city.id !== cityId),
+      apartments: (hierarchy.apartments || []).filter((apt) => apt.city_id !== cityId),
+      flats: (hierarchy.flats || []).filter((flat) => {
+        const apartment = (hierarchy.apartments || []).find((apt) => apt.id === flat.apartment_id);
+        return apartment?.city_id !== cityId;
+      }),
+      rooms: (hierarchy.rooms || []).filter((room) => {
+        const flat = (hierarchy.flats || []).find((f) => f.id === room.flat_id);
+        const apartment = (hierarchy.apartments || []).find((apt) => apt.id === flat?.apartment_id);
+        return apartment?.city_id !== cityId;
+      }),
+      beds: (hierarchy.beds || []).filter((bed) => {
+        const room = (hierarchy.rooms || []).find((r) => r.id === bed.room_id);
+        const flat = (hierarchy.flats || []).find((f) => f.id === room?.flat_id);
+        const apartment = (hierarchy.apartments || []).find((apt) => apt.id === flat?.apartment_id);
+        return apartment?.city_id !== cityId;
+      }),
+    };
+
+    saveHierarchy(updatedHierarchy);
+
+    if (selectedCity?.id === cityId) {
+      setSelectedCity(null);
+      setSelectedApartment(null);
+      setSelectedFlat(null);
+    }
+  } catch (error) {
+    console.error("Error deleting city:", error);
+    alert("Error deleting city. Please try again.");
   }
+}
+
 
   const handleUpdateCity = (cityId: number) => {
     // if (!editName.trim()) return
@@ -166,55 +194,85 @@ export default function AdminManagementPage() {
   }
 
   // Apartment CRUD
-  const handleAddApartment = () => {
-    // if (!newItemName.trim() || !selectedCity) return
-    // try {
-    //   const newApartment = {
-    //     id: Date.now(),
-    //     name: newItemName.trim(),
-    //     cityId: selectedCity.id,
-    //     googleMapLink: newApartmentMapLink.trim() || "",
-    //   }
-    //   const updatedHierarchy = {
-    //     ...hierarchy,
-    //     apartments: [...(hierarchy.apartments || []), newApartment],
-    //   }
-    //   saveHierarchy(updatedHierarchy)
-    //   setNewItemName("")
-    //   setNewApartmentMapLink("")
-    // } catch (error) {
-    //   console.error("Error adding apartment:", error)
-    //   alert("Error adding apartment. Please try again.")
-    // }
-  }
+const handleAddApartment = async () => {
+  if (!newItemName.trim() || !selectedCity) return;
 
-  const handleDeleteApartment = (apartmentId: number) => {
-    // if (!confirm("Are you sure you want to delete this apartment and all its data?")) return
-    // try {
-    //   const updatedHierarchy = {
-    //     ...hierarchy,
-    //     apartments: (hierarchy.apartments || []).filter((apt) => apt.id !== apartmentId),
-    //     flats: (hierarchy.flats || []).filter((flat) => flat.apartmentId !== apartmentId),
-    //     rooms: (hierarchy.rooms || []).filter((room) => {
-    //       const flat = (hierarchy.flats || []).find((f) => f.id === room.flatId)
-    //       return flat?.apartmentId !== apartmentId
-    //     }),
-    //     beds: (hierarchy.beds || []).filter((bed) => {
-    //       const room = (hierarchy.rooms || []).find((r) => r.id === bed.roomId)
-    //       const flat = (hierarchy.flats || []).find((f) => f.id === room?.flatId)
-    //       return flat?.apartmentId !== apartmentId
-    //     }),
-    //   }
-    //   saveHierarchy(updatedHierarchy)
-    //   if (selectedApartment?.id === apartmentId) {
-    //     setSelectedApartment(null)
-    //     setSelectedFlat(null)
-    //   }
-    // } catch (error) {
-    //   console.error("Error deleting apartment:", error)
-    //   alert("Error deleting apartment. Please try again.")
-    // }
+  try {
+    const newApartmentData = {
+      name: newItemName.trim(),
+      cityId: selectedCity.id,
+      googleMapLink: newApartmentMapLink.trim() || "",
+    };
+
+    const createdApartment = await createApartmentApi(newApartmentData); // ← server POST
+
+    const updatedHierarchy = {
+      ...hierarchy,
+      apartments: [...(hierarchy.apartments || []), {
+        id: createdApartment.id,
+        name: createdApartment.name,
+        city_id: createdApartment.city_id,
+        googleMapLink: createdApartment.google_map_link,
+      }],
+    };
+
+    saveHierarchy(updatedHierarchy);
+    setNewItemName("");
+    setNewApartmentMapLink("");
+  } catch (error) {
+    console.error("Error adding apartment:", error);
+    alert("Error adding apartment. Please try again.");
   }
+};
+
+const handleDeleteApartment = async (apartmentId: number) => {
+  if (!confirm("Are you sure you want to delete this apartment and all its data?")) return;
+
+  try {
+    // Step 1: Call backend DELETE API
+    const response = await fetch(`http://localhost:5001/api/apartments/${apartmentId}`, {
+      method: "DELETE",
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+
+    const result = await response.json();
+
+    if (!result.success) {
+      alert("Failed to delete apartment. Please try again.");
+      return;
+    }
+
+    console.log("Apartment deleted successfully:", result);
+
+    // Step 2: Update local state only after success
+    const updatedHierarchy = {
+      ...hierarchy,
+      apartments: (hierarchy.apartments || []).filter((apt) => apt.id !== apartmentId),
+      flats: (hierarchy.flats || []).filter((flat) => flat.apartment_id !== apartmentId),
+      rooms: (hierarchy.rooms || []).filter((room) => {
+        const flat = (hierarchy.flats || []).find((f) => f.id === room.flat_id);
+        return flat?.apartment_id !== apartmentId;
+      }),
+      beds: (hierarchy.beds || []).filter((bed) => {
+        const room = (hierarchy.rooms || []).find((r) => r.id === bed.room_id);
+        const flat = (hierarchy.flats || []).find((f) => f.id === room?.flat_id);
+        return flat?.apartment_id !== apartmentId;
+      }),
+    };
+
+    saveHierarchy(updatedHierarchy);
+
+    if (selectedApartment?.id === apartmentId) {
+      setSelectedApartment(null);
+      setSelectedFlat(null);
+    }
+  } catch (error) {
+    console.error("Error deleting apartment:", error);
+    alert("Error deleting apartment. Please try again.");
+  }
+};
 
   const handleUpdateApartment = (apartmentId: number) => {
     // if (!editName.trim()) return
@@ -235,72 +293,132 @@ export default function AdminManagementPage() {
   }
 
   // Flat CRUD
-  const handleAddFlat = () => {
-    // if (!newItemName.trim() || !selectedApartment || roomsConfig.length === 0) return
-    // try {
-    //   const flatId = Date.now()
-    //   const newFlat = {
-    //     id: flatId,
-    //     name: newItemName.trim(),
-    //     apartmentId: selectedApartment.id,
-    //     rooms: roomsConfig,
-    //   }
-    //   const newRooms = []
-    //   const newBeds = []
-    //   roomsConfig.forEach((roomConfig, index) => {
-    //     const roomId = flatId + index
-    //     newRooms.push({
-    //       id: roomId,
-    //       name: roomConfig.name,
-    //       flatId: flatId,
-    //       beds: roomConfig.beds,
-    //     })
-    //     for (let j = 0; j < roomConfig.beds; j++) {
-    //       newBeds.push({
-    //         id: roomId * 100 + j,
-    //         name: `B${j + 1}`,
-    //         roomId: roomId,
-    //         status: null,
-    //         blockedBy: null,
-    //       })
-    //     }
-    //   })
-    //   const updatedHierarchy = {
-    //     ...hierarchy,
-    //     flats: [...(hierarchy.flats || []), newFlat],
-    //     rooms: [...(hierarchy.rooms || []), ...newRooms],
-    //     beds: [...(hierarchy.beds || []), ...newBeds],
-    //   }
-    //   saveHierarchy(updatedHierarchy)
-    //   setNewItemName("")
-    //   setRoomsConfig([{ name: "R1", beds: 2 }])
-    // } catch (error) {
-    //   console.error("Error adding flat:", error)
-    //   alert("Error adding flat. Please try again.")
-    // }
-  }
+const handleAddFlat = async () => {
+  if (!newItemName.trim() || !selectedApartment || roomsConfig.length === 0) return;
 
-  const handleDeleteFlat = (flatId: number) => {
-    // if (!confirm("Are you sure you want to delete this flat and all its data?")) return
-    // try {
-    //   const updatedHierarchy = {
-    //     ...hierarchy,
-    //     flats: (hierarchy.flats || []).filter((flat) => flat.id !== flatId),
-    //     rooms: (hierarchy.rooms || []).filter((room) => room.flatId !== flatId),
-    //     beds: (hierarchy.beds || []).filter((bed) => {
-    //       const room = (hierarchy.rooms || []).find((r) => r.id === bed.roomId)
-    //       return room?.flatId !== flatId
-    //     }),
-    //   }
-    //   saveHierarchy(updatedHierarchy)
-    //   if (selectedFlat?.id === flatId) {
-    //     setSelectedFlat(null)
-    //   }
-    // } catch (error) {
-    //   console.error("Error deleting flat:", error)
-    //   alert("Error deleting flat. Please try again.")
-    // }
+  try {
+    // 1. Create Flat
+    const flatRes = await fetch("http://localhost:5001/api/flats", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: newItemName.trim(),
+        apartment_id: selectedApartment.id,
+      }),
+    });
+
+    const flatData = await flatRes.json();
+    if (!flatData.success) throw new Error("Flat creation failed");
+
+    const createdFlat = flatData.flat;
+    const newRooms = [];
+
+    // 2. Create Rooms
+    for (const roomConfig of roomsConfig) {
+      const roomRes = await fetch("http://localhost:5001/api/rooms", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: roomConfig.name,
+          flat_id: createdFlat.id,
+          beds: roomConfig.beds, // backend handles bed creation
+        }),
+      });
+
+      const roomData = await roomRes.json();
+      if (!roomData.success) throw new Error("Room creation failed");
+
+      const createdRoom = roomData.room;
+      newRooms.push({
+        id: createdRoom.id,
+        name: createdRoom.name,
+        flatId: createdFlat.id,
+        beds: createdRoom.beds,
+      });
+    }
+
+    // ✅ Corrected flat with real room data
+   // 3. Update local state
+const newFlat = {
+  id: createdFlat.id,
+  name: createdFlat.name,
+  apartmentId: createdFlat.apartment_id,
+  rooms: roomsConfig,
+};
+
+const updatedHierarchy = {
+  ...hierarchy,
+  flats: [...(hierarchy.flats || []), newFlat],
+  rooms: [...(hierarchy.rooms || []), ...newRooms],
+};
+
+saveHierarchy(updatedHierarchy);
+
+// ✅ Update selected apartment with the new flat (so UI updates instantly)
+setSelectedApartment((prev: typeof selectedApartment) => {
+  if (!prev) return null;
+  return {
+    ...prev,
+    flats: [...(prev.flats || []), newFlat],
+  };
+});
+console.log("New flat added to selectedApartment", newFlat);
+
+
+setNewItemName("");
+setRoomsConfig([{ name: "R1", beds: 2 }]);
+
+  } catch (error) {
+    console.error("Error adding flat:", error);
+    alert("Error adding flat. Please try again.");
   }
+};
+
+
+
+
+  const handleDeleteFlat = async (flatId: number) => {
+  if (!confirm("Are you sure you want to delete this flat and all its data?")) return;
+
+  try {
+    // 1. Call backend DELETE API
+    const response = await fetch(`http://localhost:5001/api/flats/${flatId}`, {
+      method: "DELETE",
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+
+    const result = await response.json();
+
+    if (!result.success) {
+      alert("Failed to delete flat. Please try again.");
+      return;
+    }
+    console.log("Flat deleted successfully:", result);
+    // 2. Update local hierarchy
+    const updatedHierarchy = {
+      ...hierarchy,
+      flats: (hierarchy.flats || []).filter((flat) => flat.id !== flatId),
+      rooms: (hierarchy.rooms || []).filter((room) => room.flat_id !== flatId),
+      beds: (hierarchy.beds || []).filter((bed) => {
+        const room = (hierarchy.rooms || []).find((r) => r.id === bed.room_id);
+        return room?.flat_id !== flatId;
+      }),
+    };
+
+    saveHierarchy(updatedHierarchy);
+
+    // 3. Clear selection if needed
+    if (selectedFlat?.id === flatId) {
+      setSelectedFlat(null);
+    }
+  } catch (error) {
+    console.error("Error deleting flat:", error);
+    alert("Error deleting flat. Please try again.");
+  }
+};
+
 
   const handleUpdateFlat = (flatId: number) => {
     if (!editName.trim()) return

@@ -77,111 +77,135 @@ export const deleteCity=async (req, res) => {
   }
 }
 
+// Controller: Get Availability By City ID (with booking status)
+
 export const getAvailabilityByCityId = async (req, res) => {
   const cityId = req.params.cityId;
   const { fromDate, toDate } = req.body;
+  console.log("City ID:", cityId, "From Date:", fromDate, "To Date:", toDate);
 
   try {
     const from = new Date(fromDate);
     const to = new Date(toDate);
 
-    // 1. Get all approved requests that overlap with the input range
+    // Get all approved requests that overlap with the requested dates
     const overlappingRequests = await pool.query(
-      `SELECT * FROM requests 
+      `SELECT id FROM requests 
        WHERE city_id = $1 AND status = 'approved'
-       AND (
-         (date_from, date_to) OVERLAPS ($2::date, $3::date)
-       )`,
+       AND ((check_in, check_out) OVERLAPS ($2::date, $3::date))`,
       [cityId, from, to]
     );
 
     const requestIds = overlappingRequests.rows.map(r => r.id);
 
-    // 2. Find all booked entity IDs (flats, rooms, beds) for overlapping requests
-    const bookedFlats = await pool.query(
-      `SELECT flat_id FROM request_assignments WHERE request_id = ANY($1::int[]) AND flat_id IS NOT NULL`,
-      [requestIds]
-    );
-    const bookedRooms = await pool.query(
-      `SELECT room_id FROM request_assignments WHERE request_id = ANY($1::int[]) AND room_id IS NOT NULL`,
-      [requestIds]
-    );
-    const bookedBeds = await pool.query(
-      `SELECT bed_id FROM request_assignments WHERE request_id = ANY($1::int[]) AND bed_id IS NOT NULL`,
-      [requestIds]
+    // Get all assigned accommodations for these requests
+    const assignedAccommodations = await pool.query(
+      `SELECT 
+         flat_id, 
+         room_id, 
+         bed_id 
+       FROM assigned_accommodations 
+       WHERE request_id = ANY($1::int[])`,
+      [requestIds.length ? requestIds : [0]] // Use [0] when empty to avoid SQL error
     );
 
-    const bookedFlatIds = bookedFlats.rows.map(r => r.flat_id);
-    const bookedRoomIds = bookedRooms.rows.map(r => r.room_id);
-    const bookedBedIds = bookedBeds.rows.map(r => r.bed_id);
+    // Create sets of booked IDs for quick lookup
+    const bookedFlats = new Set();
+    const bookedRooms = new Set();
+    const bookedBeds = new Set();
 
-    // 3. Get all apartments in the city
+    assignedAccommodations.rows.forEach(acc => {
+      if (acc.bed_id) {
+        bookedBeds.add(acc.bed_id);
+      } else if (acc.room_id) {
+        bookedRooms.add(acc.room_id);
+      } else if (acc.flat_id) {
+        bookedFlats.add(acc.flat_id);
+      }
+    });
+
+    // Get the complete apartment structure for the city
     const apartments = await pool.query(
-      `SELECT a.id AS apartment_id, a.name AS apartment_name, f.id AS flat_id, f.name AS flat_name,
-              r.id AS room_id, r.name AS room_name, b.id AS bed_id, b.name AS bed_name
-       FROM apartments a
-       JOIN flats f ON a.id = f.apartment_id
-       LEFT JOIN rooms r ON f.id = r.flat_id
-       LEFT JOIN beds b ON r.id = b.room_id
-       WHERE a.city_id = $1
-       ORDER BY a.id, f.id, r.id, b.id`,
+      `SELECT 
+        a.id AS apartment_id, 
+        a.name AS apartment_name, 
+        a.google_map_link,
+        f.id AS flat_id, 
+        f.name AS flat_name,
+        r.id AS room_id, 
+        r.name AS room_name,
+        b.id AS bed_id, 
+        b.name AS bed_name
+      FROM apartments a
+      JOIN flats f ON a.id = f.apartment_id
+      LEFT JOIN rooms r ON f.id = r.flat_id
+      LEFT JOIN beds b ON r.id = b.room_id
+      WHERE a.city_id = $1
+      ORDER BY a.id, f.id, r.id, b.id`,
       [cityId]
     );
 
+    // Build the hierarchical structure with booking status
     const result = {};
 
     for (const row of apartments.rows) {
+      // Initialize apartment if not exists
       if (!result[row.apartment_id]) {
         result[row.apartment_id] = {
-          apartmentId: row.apartment_id,
-          apartmentName: row.apartment_name,
+          id: row.apartment_id,
+          name: row.apartment_name,
+          google_map_link: row.google_map_link,
           flats: {}
         };
       }
 
+      // Initialize flat if not exists
       if (!result[row.apartment_id].flats[row.flat_id]) {
         result[row.apartment_id].flats[row.flat_id] = {
-          flatId: row.flat_id,
-          flatName: row.flat_name,
-          isBooked: bookedFlatIds.includes(row.flat_id),
+          id: row.flat_id,
+          name: row.flat_name,
+          is_booked: bookedFlats.has(row.flat_id),
           rooms: {}
         };
       }
 
+      // Process room if exists
       if (row.room_id && !result[row.apartment_id].flats[row.flat_id].rooms[row.room_id]) {
         result[row.apartment_id].flats[row.flat_id].rooms[row.room_id] = {
-          roomId: row.room_id,
-          roomName: row.room_name,
-          isBooked: bookedRoomIds.includes(row.room_id),
-          beds: {}
+          id: row.room_id,
+          name: row.room_name,
+          is_booked: bookedRooms.has(row.room_id),
+          cottages: {}
         };
       }
 
-      if (row.bed_id && result[row.apartment_id].flats[row.flat_id].rooms[row.room_id]) {
-        result[row.apartment_id].flats[row.flat_id].rooms[row.room_id].beds[row.bed_id] = {
-          bedId: row.bed_id,
-          bedName: row.bed_name,
-          isBooked: bookedBedIds.includes(row.bed_id)
+      // Process bed (cottage) if exists
+      if (row.bed_id && row.room_id && result[row.apartment_id].flats[row.flat_id].rooms[row.room_id]) {
+        result[row.apartment_id].flats[row.flat_id].rooms[row.room_id].cottages[row.bed_id] = {
+          id: row.bed_id,
+          name: row.bed_name,
+          is_booked: bookedBeds.has(row.bed_id)
         };
       }
     }
 
-    // Convert nested structure to array
+    // Convert the nested objects to arrays for the response
     const structuredResult = Object.values(result).map(apartment => ({
       ...apartment,
       flats: Object.values(apartment.flats).map(flat => ({
         ...flat,
         rooms: Object.values(flat.rooms).map(room => ({
           ...room,
-          beds: Object.values(room.beds)
+          cottages: Object.values(room.cottages)
         }))
       }))
     }));
 
     res.json({
       success: true,
-      data: structuredResult
+      apartments: structuredResult
     });
+
   } catch (err) {
     console.error("Error fetching availability:", err);
     res.status(500).json({
@@ -190,6 +214,7 @@ export const getAvailabilityByCityId = async (req, res) => {
     });
   }
 };
+
 
 /*
 Sample request:

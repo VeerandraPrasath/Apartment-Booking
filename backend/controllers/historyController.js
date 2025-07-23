@@ -341,6 +341,8 @@ export const approveRequest = async (req, res) => {
     remarks
   } = req.body;
 
+  console.log(assignedAccommodations);
+
   try {
     // Step 1: Fetch the request
     const requestRes = await db.query(
@@ -357,13 +359,13 @@ export const approveRequest = async (req, res) => {
     // Step 2: Mark each accommodation as booked and insert assignment
     for (const member of assignedAccommodations) {
       // Mark as booked
-      if (member.bed_id) {
-        await db.query(`UPDATE beds SET is_booked = true WHERE id = $1`, [member.bed_id]);
-      } else if (member.room_id) {
-        await db.query(`UPDATE rooms SET is_booked = true WHERE id = $1`, [member.room_id]);
-      } else if (member.flat_id) {
-        await db.query(`UPDATE flats SET is_booked = true WHERE id = $1`, [member.flat_id]);
-      }
+      // if (member.bed_id) {
+      //   await db.query(`UPDATE beds SET is_booked = true WHERE id = $1`, [member.bed_id]);
+      // } else if (member.room_id) {
+      //   await db.query(`UPDATE rooms SET is_booked = true WHERE id = $1`, [member.room_id]);
+      // } else if (member.flat_id) {
+      //   await db.query(`UPDATE flats SET is_booked = true WHERE id = $1`, [member.flat_id]);
+      // }
 
       // Insert into assigned_accommodations
       await db.query(

@@ -243,29 +243,58 @@ const getAvailableAccommodations = async (
       }),
     });
 
-    console.log("Fetching accommodations for city:", cityId, "Type:", type, "Assigned:", assignedAccommodations);
     const data = await response.json();
-    
-    if (!data.success || !Array.isArray(data.apartments)) {
-      console.error("Invalid data format received");
-      return [];
-    }
-
-    // Store the complete accommodation tree with all IDs
-    setAccommodationTreeByCity(data);
-    console.log("Stored accommodation tree:", data);
+    if (!data.success || !Array.isArray(data.apartments)) return [];
 
     // Create maps of all assigned items
     const assignedFlats = new Set<string>();
     const assignedRooms = new Set<string>();
     const assignedBeds = new Set<string>();
 
+    // Create maps of all excluded items (children of assigned items)
+    const excludedFlats = new Set<string>();
+    const excludedRooms = new Set<string>();
+    const excludedBeds = new Set<string>();
+
     // Process all assignments to build exclusion sets
     Object.values(assignedAccommodations).forEach((item) => {
       const parts = item.split('-');
-      if (parts.length === 1) assignedFlats.add(item);
-      else if (parts.length === 2) assignedRooms.add(item);
-      else if (parts.length === 3) assignedBeds.add(item);
+
+      if (parts.length === 1) {
+        // Flat assigned - exclude all its rooms and beds
+        assignedFlats.add(item);
+        data.apartments.forEach((apt) => {
+          apt.flats?.forEach((flat) => {
+            if (flat.name === item) {
+              flat.rooms?.forEach((room) => {
+                excludedRooms.add(`${item}-${room.name}`);
+                room.cottages?.forEach((bed) => {
+                  excludedBeds.add(`${item}-${room.name}-${bed.name}`);
+                });
+              });
+            }
+          });
+        });
+      } else if (parts.length === 2) {
+        // Room assigned - exclude all its beds
+        assignedRooms.add(item);
+        data.apartments.forEach((apt) => {
+          apt.flats?.forEach((flat) => {
+            if (flat.name === parts[0]) {
+              flat.rooms?.forEach((room) => {
+                if (room.name === parts[1]) {
+                  room.cottages?.forEach((bed) => {
+                    excludedBeds.add(`${item}-${bed.name}`);
+                  });
+                }
+              });
+            }
+          });
+        });
+      } else if (parts.length === 3) {
+        // Bed assigned - no exclusions (parent room remains available)
+        assignedBeds.add(item);
+      }
     });
 
     const accommodations: { apartment: string; items: string[] }[] = [];
@@ -274,44 +303,53 @@ const getAvailableAccommodations = async (
       let items: string[] = [];
 
       if (type === "flats") {
+        // Only show flats that:
+        // 1. Aren't booked
+        // 2. Aren't assigned to someone
+        // 3. Don't have any assigned rooms/beds
         for (const flat of apartment.flats || []) {
-          if (!flat.is_booked && !assignedFlats.has(flat.name)) {
-            // Check if any rooms/beds in this flat are assigned
-            const hasAssignedChildren = [...assignedRooms, ...assignedBeds].some(item => 
-              item.startsWith(`${flat.name}-`)
-            );
-            if (!hasAssignedChildren) {
-              items.push(flat.name);
-            }
+          if (
+            !flat.is_booked &&
+            !assignedFlats.has(flat.name) &&
+            !Array.from(assignedRooms).some(room => room.startsWith(`${flat.name}-`)) &&
+            !Array.from(assignedBeds).some(bed => bed.startsWith(`${flat.name}-`))
+          ) {
+            items.push(flat.name);
           }
         }
-      } 
-      else if (type === "rooms") {
+      } else if (type === "rooms") {
+        // Only show rooms that:
+        // 1. Aren't booked
+        // 2. Aren't in an assigned flat
+        // 3. Aren't assigned to someone
+        // 4. Don't have any assigned beds
         for (const flat of apartment.flats || []) {
           if (assignedFlats.has(flat.name)) continue;
-          
+
           for (const room of flat.rooms || []) {
             const roomKey = `${flat.name}-${room.name}`;
-            if (!room.is_booked && !assignedRooms.has(roomKey)) {
-              // Check if any beds in this room are assigned
-              const hasAssignedBeds = [...assignedBeds].some(bed => 
-                bed.startsWith(roomKey)
-              );
-              if (!hasAssignedBeds) {
-                items.push(roomKey);
-              }
+            if (
+              !room.is_booked &&
+              !assignedRooms.has(roomKey) &&
+              !Array.from(assignedBeds).some(bed => bed.startsWith(roomKey))
+            ) {
+              items.push(roomKey);
             }
           }
         }
-      } 
-      else if (type === "beds") {
+      } else if (type === "beds") {
+        // Only show beds that:
+        // 1. Aren't booked
+        // 2. Aren't in an assigned flat
+        // 3. Aren't in an assigned room
+        // 4. Aren't assigned to someone
         for (const flat of apartment.flats || []) {
           if (assignedFlats.has(flat.name)) continue;
-          
+
           for (const room of flat.rooms || []) {
             const roomKey = `${flat.name}-${room.name}`;
             if (assignedRooms.has(roomKey)) continue;
-            
+
             for (const bed of room.cottages || []) {
               const bedKey = `${roomKey}-${bed.name}`;
               if (!bed.is_booked && !assignedBeds.has(bedKey)) {
@@ -323,20 +361,17 @@ const getAvailableAccommodations = async (
       }
 
       if (items.length > 0) {
-        accommodations.push({ 
-          apartment: apartment.name, 
-          items 
-        });
+        accommodations.push({ apartment: apartment.name, items });
       }
     }
 
-    console.log("Available accommodations:", accommodations);
     return accommodations;
   } catch (error) {
     console.error("Error fetching accommodations:", error);
     return [];
   }
 };
+
 
   const handleApprove = async () => {
   if (!selectedRequest || Object.keys(assignedAccommodations).length === 0) return
@@ -407,53 +442,44 @@ const getAvailableAccommodations = async (
 })
 
     // Helper functions to get IDs by names (implement based on your accommodation data)
-// Updated helper functions
-function getFlatAndApartmentIdByName(flatName: string) {
-  if (!accommodationTreeByCity?.apartments) return { flat_id: null, apartment_id: null };
-  
-  for (const apartment of accommodationTreeByCity.apartments) {
+  function getFlatAndApartmentIdByName(flatName: string) {
+  if (!accommodationTreeByCity) return { flat_id: null, apartment_id: null }
+  for (const apartment of accommodationTreeByCity.apartments || []) {
     for (const flat of apartment.flats || []) {
       if (flat.name === flatName) {
-        return { 
-          flat_id: flat.id, 
-          apartment_id: apartment.id 
-        };
+        return { flat_id: flat.id, apartment_id: apartment.id }
       }
     }
   }
-  console.error(`Flat not found: ${flatName}`);
-  return { flat_id: null, apartment_id: null };
+  return { flat_id: null, apartment_id: null }
 }
 
 function getRoomIdByName(flatName: string, roomName: string) {
-  if (!accommodationTreeByCity?.apartments) return null;
-  
-  for (const apartment of accommodationTreeByCity.apartments) {
+  if (!accommodationTreeByCity) return null
+  for (const apartment of accommodationTreeByCity.apartments || []) {
     for (const flat of apartment.flats || []) {
       if (flat.name === flatName) {
         for (const room of flat.rooms || []) {
           if (room.name === roomName) {
-            return room.id;
+            return room.id
           }
         }
       }
     }
   }
-  console.error(`Room not found: ${flatName}-${roomName}`);
-  return null;
+  return null
 }
 
 function getBedIdByName(flatName: string, roomName: string, bedName: string) {
-  if (!accommodationTreeByCity?.apartments) return null;
-  
-  for (const apartment of accommodationTreeByCity.apartments) {
+  if (!accommodationTreeByCity) return null
+  for (const apartment of accommodationTreeByCity.apartments || []) {
     for (const flat of apartment.flats || []) {
       if (flat.name === flatName) {
         for (const room of flat.rooms || []) {
           if (room.name === roomName) {
             for (const bed of room.cottages || []) {
               if (bed.name === bedName) {
-                return bed.id;
+                return bed.id
               }
             }
           }
@@ -461,8 +487,7 @@ function getBedIdByName(flatName: string, roomName: string, bedName: string) {
       }
     }
   }
-  console.error(`Bed not found: ${flatName}-${roomName}-${bedName}`);
-  return null;
+  return null
 }
 
     // Build request body
@@ -472,7 +497,7 @@ function getBedIdByName(flatName: string, roomName: string, bedName: string) {
       remarks,
       processedAt: new Date().toISOString(),
     }
-    console.log("Request body:", requestBody)
+    console.log("Request body:", requestBody.assignedAccommodations)
     // Make API call
     const response = await fetch(`http://localhost:5001/api/requests/${selectedRequest.id}/approve`, {
       method: "POST",

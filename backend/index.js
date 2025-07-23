@@ -27,7 +27,8 @@ const {
   CLIENT_SECRET,
   TENANT_ID,
   REDIRECT_URI,
-  FRONTEND_URL
+  FRONTEND_URL,
+  ADMIN
 } = process.env;
 
 // Step 1: Redirect to Microsoft login
@@ -100,7 +101,7 @@ const nameEnc = encodeURIComponent(name);
 const emailEnc = encodeURIComponent(email);
 const jobTitleEnc = encodeURIComponent(jobTitle);
 
-if (email === 'veerandra.prasath@solitontech.com') {
+if (email === ADMIN) {
   res.redirect(`${FRONTEND_URL}/admin/requests?name=${nameEnc}&email=${emailEnc}&jobTitle=${jobTitleEnc}&id=${userId}`);
 } else {
   res.redirect(`${FRONTEND_URL}/booking?name=${nameEnc}&email=${emailEnc}&jobTitle=${jobTitleEnc}&id=${userId}`);

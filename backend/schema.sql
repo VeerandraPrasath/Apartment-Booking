@@ -53,15 +53,12 @@ CREATE TABLE IF NOT EXISTS requests (
     status request_status DEFAULT 'pending',
     booking_type booking_type DEFAULT 'individual',
     remarks TEXT,
-    date_from DATE NOT NULL,
-    date_to DATE NOT NULL,
-    booking_for VARCHAR(100), -- added to track who the booking is for (only for individual)
     processed_at TIMESTAMP,
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 8. TEAM MEMBERS
-CREATE TABLE IF NOT EXISTS team_members (
+CREATE TABLE IF NOT EXISTS booking_members (
     id SERIAL PRIMARY KEY,
     request_id INT REFERENCES requests(id) ON DELETE CASCADE,
     user_id INT REFERENCES users(id) ON DELETE CASCADE

@@ -139,94 +139,161 @@ function formatAssignment(row) {
 }
 
 
+// import pool from "../config/db.js";
+
 export const createBooking = async (req, res) => {
-  const {
-    user,            // { id, name, email, role }
-    city,            // city name
-    dates,           // { from: 'YYYY-MM-DD', to: 'YYYY-MM-DD' }
-    checkInTime,     // 'HH:mm'
-    checkOutTime,    // 'HH:mm'
-    bookingType,
-    bookingFor,     // 'individual' or 'team'
-    remarks = null,
-    teamMembers = [] // array of emails (only if bookingType is team)
-  } = req.body;
+  const client = await pool.connect();
 
   try {
-    // Combine date and time strings manually
-    const checkIn = `${dates.from} ${checkInTime}`;     // e.g., '2025-07-20 08:00'
-    const checkOut = `${dates.to} ${checkOutTime}`;     // e.g., '2025-07-24 10:00'
+    const { userId, cityId, bookingType, BookingMembers } = req.body;
 
-    const fromDate = new Date(dates.from);
-    const toDate = new Date(dates.to);
+    await client.query("BEGIN");
 
-    const durationInDays = (toDate - fromDate) / (1000 * 60 * 60 * 24);
-
-    if (durationInDays > 14) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation error: Maximum stay is 14 days.'
-      });
-    }
-
-    // 1. Fetch city_id
-    const cityResult = await pool.query(
-      'SELECT id FROM cities WHERE LOWER(name) = LOWER($1)',
-      [city]
-    );
-    if (cityResult.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'City not found.'
-      });
-    }
-
-    const cityId = cityResult.rows[0].id;
-
-    // 2. Insert into requests
-    const insertRequest = await pool.query(
-      `INSERT INTO requests (
-         user_id, city_id, booking_type, remarks,
-         date_from, date_to, check_in, check_out,booking_for
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7::timestamp, $8::timestamp,$9)
+    // 1. Insert into `requests` table
+    const requestRes = await client.query(
+      `INSERT INTO requests (user_id, city_id, booking_type)
+       VALUES ($1, $2, $3)
        RETURNING id`,
-      [
-        user.id,
-        cityId,
-        bookingType,
-        remarks,
-        dates.from,
-        dates.to,
-        checkIn,
-        checkOut,
-        bookingFor
-      ]
+      [userId, cityId, bookingType]
     );
 
-    const requestId = insertRequest.rows[0].id;
+    const requestId = requestRes.rows[0].id;
 
-    // 3. If team booking, insert members
-    if (bookingType === 'team' && teamMembers.length > 0) {
-      const memberInsertPromises = teamMembers.map(email =>
-        pool.query(
-          'INSERT INTO team_members (request_id, email) VALUES ($1, $2)',
-          [requestId, email]
-        )
+    // 2. Loop through each member
+    for (const member of BookingMembers) {
+      const { userId: memberUserId, checkInTime, checkOutTime } = member;
+
+      // Construct timestamps for today + check-in/out
+      const today = new Date().toISOString().split("T")[0];
+      const checkIn = new Date(`${today}T${checkInTime}:00`);
+      const checkOut = new Date(`${today}T${checkOutTime}:00`);
+
+      // 3. If team booking and member != requester, insert into booking_members
+      if (bookingType === "team" && memberUserId !== userId) {
+        await client.query(
+          `INSERT INTO booking_members (request_id, user_id)
+           VALUES ($1, $2)`,
+          [requestId, memberUserId]
+        );
+      }
+
+      // 4. Insert into assigned_accommodations
+      await client.query(
+        `INSERT INTO assigned_accommodations 
+          (request_id, user_id, check_in, check_out, city_id)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [requestId, memberUserId, checkIn, checkOut, cityId]
       );
-      await Promise.all(memberInsertPromises);
     }
 
-    res.json({
+    await client.query("COMMIT");
+
+    res.status(201).json({
       success: true,
-      message: 'Booking request submitted successfully.',
-      requestId
+      message: "Booking request submitted",
+      requestId,
     });
 
   } catch (err) {
-    console.error('Booking request error:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Server error.'
-    });
+    await client.query("ROLLBACK");
+    console.error("Booking error:", err);
+    res.status(500).json({ success: false, error: "Failed to create booking request" });
+  } finally {
+    client.release();
   }
 };
+
+
+
+
+// export const createBooking = async (req, res) => {
+//   const {
+//     user,            // { id, name, email, role }
+//     city,            // city name
+//     dates,           // { from: 'YYYY-MM-DD', to: 'YYYY-MM-DD' }
+//     checkInTime,     // 'HH:mm'
+//     checkOutTime,    // 'HH:mm'
+//     bookingType,
+//     bookingFor,     // 'individual' or 'team'
+//     remarks = null,
+//     teamMembers = [] // array of emails (only if bookingType is team)
+//   } = req.body;
+
+//   try {
+//     // Combine date and time strings manually
+//     const checkIn = `${dates.from} ${checkInTime}`;     // e.g., '2025-07-20 08:00'
+//     const checkOut = `${dates.to} ${checkOutTime}`;     // e.g., '2025-07-24 10:00'
+
+//     const fromDate = new Date(dates.from);
+//     const toDate = new Date(dates.to);
+
+//     const durationInDays = (toDate - fromDate) / (1000 * 60 * 60 * 24);
+
+//     if (durationInDays > 14) {
+//       return res.status(400).json({
+//         success: false,
+//         message: 'Validation error: Maximum stay is 14 days.'
+//       });
+//     }
+
+//     // 1. Fetch city_id
+//     const cityResult = await pool.query(
+//       'SELECT id FROM cities WHERE LOWER(name) = LOWER($1)',
+//       [city]
+//     );
+//     if (cityResult.rows.length === 0) {
+//       return res.status(404).json({
+//         success: false,
+//         message: 'City not found.'
+//       });
+//     }
+
+//     const cityId = cityResult.rows[0].id;
+
+//     // 2. Insert into requests
+//     const insertRequest = await pool.query(
+//       `INSERT INTO requests (
+//          user_id, city_id, booking_type, remarks,
+//          date_from, date_to, check_in, check_out,booking_for
+//        ) VALUES ($1, $2, $3, $4, $5, $6, $7::timestamp, $8::timestamp,$9)
+//        RETURNING id`,
+//       [
+//         user.id,
+//         cityId,
+//         bookingType,
+//         remarks,
+//         dates.from,
+//         dates.to,
+//         checkIn,
+//         checkOut,
+//         bookingFor
+//       ]
+//     );
+
+//     const requestId = insertRequest.rows[0].id;
+
+//     // 3. If team booking, insert members
+//     if (bookingType === 'team' && teamMembers.length > 0) {
+//       const memberInsertPromises = teamMembers.map(email =>
+//         pool.query(
+//           'INSERT INTO team_members (request_id, email) VALUES ($1, $2)',
+//           [requestId, email]
+//         )
+//       );
+//       await Promise.all(memberInsertPromises);
+//     }
+
+//     res.json({
+//       success: true,
+//       message: 'Booking request submitted successfully.',
+//       requestId
+//     });
+
+//   } catch (err) {
+//     console.error('Booking request error:', err);
+//     res.status(500).json({
+//       success: false,
+//       message: 'Server error.'
+//     });
+//   }
+// };

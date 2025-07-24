@@ -28,29 +28,21 @@ CREATE TABLE IF NOT EXISTS apartments (
 CREATE TABLE IF NOT EXISTS flats (
     id SERIAL PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
-    apartment_id INT REFERENCES apartments(id) ON DELETE CASCADE,
-    is_booked BOOLEAN DEFAULT FALSE
+    apartment_id INT REFERENCES apartments(id) ON DELETE CASCADE
 );
 
 -- 5. ROOMS
 CREATE TABLE IF NOT EXISTS rooms (
     id SERIAL PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
-    flat_id INT REFERENCES flats(id) ON DELETE CASCADE,
-    is_booked BOOLEAN DEFAULT FALSE
+    flat_id INT REFERENCES flats(id) ON DELETE CASCADE
 );
 
 -- 6. BEDS (Cottages)
 CREATE TABLE IF NOT EXISTS beds (
     id SERIAL PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
-    room_id INT REFERENCES rooms(id) ON DELETE CASCADE,
-    status VARCHAR(20), -- 'occupied', 'available', 'maintenance'
-    blocked_by VARCHAR(100),
-    occupant_id INT REFERENCES users(id),
-    check_in DATE,
-    check_out DATE,
-    is_booked BOOLEAN DEFAULT FALSE
+    room_id INT REFERENCES rooms(id) ON DELETE CASCADE
 );
 
 -- 7. BOOKING REQUESTS
@@ -63,8 +55,6 @@ CREATE TABLE IF NOT EXISTS requests (
     remarks TEXT,
     date_from DATE NOT NULL,
     date_to DATE NOT NULL,
-    check_in TIMESTAMP,
-    check_out TIMESTAMP,
     booking_for VARCHAR(100), -- added to track who the booking is for (only for individual)
     processed_at TIMESTAMP,
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -74,17 +64,20 @@ CREATE TABLE IF NOT EXISTS requests (
 CREATE TABLE IF NOT EXISTS team_members (
     id SERIAL PRIMARY KEY,
     request_id INT REFERENCES requests(id) ON DELETE CASCADE,
-    email VARCHAR(100) NOT NULL
+    user_id INT REFERENCES users(id) ON DELETE CASCADE
 );
 
 -- 9. ASSIGNED ACCOMMODATIONS
 CREATE TABLE IF NOT EXISTS assigned_accommodations (
     id SERIAL PRIMARY KEY,
     request_id INT REFERENCES requests(id) ON DELETE CASCADE,
-    user_email VARCHAR(100) NOT NULL,
-    city_id INT,
-    apartment_id INT,
-    flat_id INT,
-    room_id INT,
-    bed_id INT
+    user_id INT REFERENCES users(id) ON DELETE CASCADE,
+    check_in TIMESTAMP,
+    check_out TIMESTAMP,
+     city_id INT REFERENCES cities(id) ON DELETE SET NULL,
+     apartment_id INT REFERENCES apartments(id) ON DELETE SET NULL,
+    flat_id INT REFERENCES flats(id) ON DELETE SET NULL,
+   room_id INT REFERENCES rooms(id) ON DELETE SET NULL,
+    bed_id INT REFERENCES beds(id) ON DELETE SET NULL
+
 );

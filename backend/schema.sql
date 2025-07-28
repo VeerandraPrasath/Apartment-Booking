@@ -1,5 +1,5 @@
 -- ENUM TYPES (unchanged)
-CREATE TYPE request_status AS ENUM ('pending', 'approved', 'rejected');
+CREATE TYPE request_status AS ENUM ('pending', 'approved', 'rejected','cancelled');
 CREATE TYPE booking_type AS ENUM ('individual', 'team');
 CREATE TYPE gender_type AS ENUM ('male','female','other');
 

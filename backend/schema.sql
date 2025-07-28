@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS users (
     name VARCHAR(100) NOT NULL,
     email VARCHAR(100) UNIQUE NOT NULL,
     role VARCHAR(100) NOT NULL,
-    gender gender_type NOT NULL,
+    gender gender_type NOT NULL
 );
 
 -- 3. APARTMENTS
@@ -63,7 +63,7 @@ CREATE TABLE IF NOT EXISTS requests (
 CREATE TABLE IF NOT EXISTS booking_members (
     id SERIAL PRIMARY KEY,
     request_id INT REFERENCES requests(id) ON DELETE CASCADE,
-    user_id INT REFERENCES users(id) ON DELETE CASCADE.
+    user_id INT REFERENCES users(id) ON DELETE CASCADE,
     check_in TIMESTAMP,
     check_out TIMESTAMP
 );
@@ -77,5 +77,4 @@ CREATE TABLE IF NOT EXISTS assigned_accommodations (
     flat_id INT REFERENCES flats(id) ON DELETE SET NULL,
     room_id INT REFERENCES rooms(id) ON DELETE SET NULL,
     bed_id INT REFERENCES beds(id) ON DELETE SET NULL
-
 );

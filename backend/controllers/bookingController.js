@@ -149,7 +149,7 @@ export const createBooking = async (req, res) => {
 
     await client.query("BEGIN");
 
-    // 1. Insert into `requests` table
+    // 1. Insert into requests
     const requestRes = await client.query(
       `INSERT INTO requests (user_id, city_id, booking_type)
        VALUES ($1, $2, $3)
@@ -159,30 +159,14 @@ export const createBooking = async (req, res) => {
 
     const requestId = requestRes.rows[0].id;
 
-    // 2. Loop through each member
+    // 2. Insert all booking members
     for (const member of BookingMembers) {
       const { userId: memberUserId, checkInTime, checkOutTime } = member;
 
-      // Construct timestamps for today + check-in/out
-      const today = new Date().toISOString().split("T")[0];
-      const checkIn = new Date(`${today}T${checkInTime}:00`);
-      const checkOut = new Date(`${today}T${checkOutTime}:00`);
-
-      // 3. If team booking and member != requester, insert into booking_members
-      if (bookingType === "team" && memberUserId !== userId) {
-        await client.query(
-          `INSERT INTO booking_members (request_id, user_id)
-           VALUES ($1, $2)`,
-          [requestId, memberUserId]
-        );
-      }
-
-      // 4. Insert into assigned_accommodations
       await client.query(
-        `INSERT INTO assigned_accommodations 
-          (request_id, user_id, check_in, check_out, city_id)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [requestId, memberUserId, checkIn, checkOut, cityId]
+        `INSERT INTO booking_members (request_id, user_id, check_in, check_out)
+         VALUES ($1, $2, $3, $4)`,
+        [requestId, memberUserId, checkInTime, checkOutTime]
       );
     }
 
@@ -190,7 +174,7 @@ export const createBooking = async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message: "Booking request submitted",
+      message: "Booking request submitted successfully.",
       requestId,
     });
 
@@ -202,6 +186,7 @@ export const createBooking = async (req, res) => {
     client.release();
   }
 };
+
 
 
 

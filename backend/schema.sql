@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS users (
     name VARCHAR(100) NOT NULL,
     email VARCHAR(100) UNIQUE NOT NULL,
     role VARCHAR(100) NOT NULL,
-    gender gender_type NOT NULL
+    gender gender_type
 );
 
 -- 3. APARTMENTS

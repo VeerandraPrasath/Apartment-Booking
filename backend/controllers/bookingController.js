@@ -149,7 +149,7 @@ export const createBooking = async (req, res) => {
 
     await client.query("BEGIN");
 
-    // 1. Insert into requests
+    // 1. Insert into requests table
     const requestRes = await client.query(
       `INSERT INTO requests (user_id, city_id, booking_type)
        VALUES ($1, $2, $3)
@@ -159,7 +159,7 @@ export const createBooking = async (req, res) => {
 
     const requestId = requestRes.rows[0].id;
 
-    // 2. Insert all booking members
+    // 2. Insert each booking member into booking_members
     for (const member of BookingMembers) {
       const { userId: memberUserId, checkInTime, checkOutTime } = member;
 
@@ -186,6 +186,7 @@ export const createBooking = async (req, res) => {
     client.release();
   }
 };
+
 
 
 

@@ -1,145 +1,135 @@
-// controllers/bookingsController.js
-import pool from '../db.js';
-import dayjs from 'dayjs';
+import pool from "../db.js";
 
 
 export const getBookingHistory = async (req, res) => {
-  const {
-    city,
-    status,
-    role,
-    search,
-    dateFrom,
-    dateTo
-  } = req.query;
+  const { city, status, role, search, checkIn, checkOut } = req.query;
 
   try {
+    let query = `
+      SELECT 
+        r.id AS request_id,
+        r.status,
+        r.booking_type,
+        r.timestamp AS requested_at,
+        r.processed_at,
+        c.name AS city,
+        ru.id AS requester_id,
+        ru.name AS requester_name,
+        ru.email AS requester_email,
+        ru.role AS requester_role,
+        ru.gender AS requester_gender,
+        
+        bm.id AS member_id,
+        bm.check_in,
+        bm.check_out,
+        mu.id AS member_user_id,
+        mu.name AS member_name,
+        mu.email AS member_email,
+
+        aa.apartment_id, apt.name AS apartment_name,
+        aa.flat_id, f.name AS flat_name,
+        aa.room_id, ro.name AS room_name,
+        aa.bed_id, b.name AS bed_name
+
+      FROM requests r
+      JOIN users ru ON ru.id = r.user_id
+      JOIN cities c ON c.id = r.city_id
+      JOIN booking_members bm ON bm.request_id = r.id
+      JOIN users mu ON mu.id = bm.user_id
+      LEFT JOIN assigned_accommodations aa ON aa.booking_members_id = bm.id
+      LEFT JOIN apartments apt ON apt.id = aa.apartment_id
+      LEFT JOIN flats f ON f.id = aa.flat_id
+      LEFT JOIN rooms ro ON ro.id = aa.room_id
+      LEFT JOIN beds b ON b.id = aa.bed_id
+      WHERE 1=1
+    `;
+
     const params = [];
-    const conditions = [];
 
     if (city) {
-      conditions.push(`LOWER(c.name) = LOWER($${params.length + 1})`);
+      query += ` AND r.city_id = $${params.length + 1}`;
       params.push(city);
     }
 
     if (status) {
-      conditions.push(`b.status = $${params.length + 1}`);
-      params.push(status.toLowerCase());
+      query += ` AND r.status = $${params.length + 1}`;
+      params.push(status);
     }
 
     if (role) {
-      conditions.push(`LOWER(u.role) = LOWER($${params.length + 1})`);
+      query += ` AND ru.role = $${params.length + 1}`;
       params.push(role);
     }
 
     if (search) {
-      conditions.push(`(LOWER(u.name) LIKE LOWER($${params.length + 1}) OR LOWER(u.email) LIKE LOWER($${params.length + 1}))`);
+      query += ` AND (LOWER(ru.name) LIKE LOWER($${params.length + 1}) OR LOWER(ru.email) LIKE LOWER($${params.length + 1}))`;
       params.push(`%${search}%`);
     }
 
-    if (dateFrom) {
-      conditions.push(`b.start_time >= $${params.length + 1}`);
-      params.push(dateFrom);
-    }
-
-    if (dateTo) {
-      conditions.push(`b.end_time <= $${params.length + 1}`);
-      params.push(dateTo);
-    }
-
-    const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-
-    const query = `
-      SELECT
-        b.id,
-        b.start_time,
-        b.end_time,
-        b.status,
-        b.remarks,
-        b.booking_type,
-        b.booking_for,
-        b.team_members,
-        b.updated_at,
-        u.id AS user_id,
-        u.name AS user_name,
-        u.email AS user_email,
-        u.role AS user_role,
-        c.name AS city_name,
-        a.name AS apartment_name,
-        f.name AS flat_name,
-        r.name AS room_name,
-        co.name AS cottage_name
-      FROM bookings b
-      LEFT JOIN users u ON u.id = b.user_id
-      LEFT JOIN cities c ON c.id = (
-        SELECT city_id FROM apartments WHERE id = b.apartment_id
-      )
-      LEFT JOIN apartments a ON a.id = b.apartment_id
-      LEFT JOIN flats f ON f.id = b.flat_id
-      LEFT JOIN rooms r ON r.id = b.room_id
-      LEFT JOIN cottages co ON co.id = b.cottage_id
-      ${whereClause}
-      ORDER BY b.updated_at DESC
-    `;
-
-    const result = await pool.query(query, params);
-
-    const requests = result.rows.map(row => {
-      const teamMembers = row.team_members || [];
-      const assigned = {
-        [row.user_email]: formatAssignment(row)
-      };
-
-      teamMembers.forEach(email => {
-        assigned[email] = formatAssignment(row);
-      });
-
-      return {
-        id: row.id,
-        timestamp: row.start_time,
-        user: {
-          id: row.user_id,
-          name: row.user_name,
-          email: row.user_email,
-          role: row.user_role
-        },
-        city: row.city_name,
-        dates: {
-          from: row.start_time.toISOString().split('T')[0],
-          to: row.end_time.toISOString().split('T')[0]
-        },
-        status: row.status,
-        assignedAccommodations: assigned,
-        bookingType: row.booking_type,
-        teamMembers: teamMembers,
-        remarks: row.remarks,
-        processedAt: row.updated_at
-      };
-    });
-
-    res.json({
-      success: true,
-      requests
-    });
-
-  } catch (err) {
-    console.error('Booking History Error:', err);
-    res.status(500).json({ success: false, message: 'Server error.' });
-  }
-};
-
-// helper to format assignment
-function formatAssignment(row) {
-  return [
-    row.apartment_name,
-    row.flat_name,
-    row.room_name,
-    row.cottage_name
-  ].filter(Boolean).join(' > ');
+   if (checkIn && checkOut) {
+  query += ` AND bm.check_in <= $${params.length + 1} AND bm.check_out >= $${params.length + 2}`;
+  params.push(checkOut, checkIn);
 }
 
 
-// import pool from "../config/db.js";
+    query += ` ORDER BY r.timestamp DESC`;
+
+    const { rows } = await pool.query(query, params);
+
+    // Group by request
+    const requestMap = new Map();
+
+    for (const row of rows) {
+      if (!requestMap.has(row.request_id)) {
+        requestMap.set(row.request_id, {
+          requestId: row.request_id,
+          city: row.city,
+          requestedBy: {
+            id: row.requester_id,
+            name: row.requester_name,
+            email: row.requester_email,
+            role: row.requester_role,
+            gender: row.requester_gender,
+          },
+          status: row.status,
+          bookingType: row.booking_type,
+          processedAt: row.processed_at,
+          requestedAt: row.requested_at,
+          bookingMembers: [],
+        });
+      }
+
+      const req = requestMap.get(row.request_id);
+      req.bookingMembers.push({
+        id: row.member_user_id,
+        name: row.member_name,
+        email: row.member_email,
+        checkIn: row.check_in,
+        checkOut: row.check_out,
+        assignedAccommodation: {
+          apartment: row.apartment_name,
+          flat: row.flat_name,
+          room: row.room_name,
+          bed: row.bed_name,
+        },
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: Array.from(requestMap.values()),
+    });
+
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
+  }
+};
+
 
 export const createBooking = async (req, res) => {
   const client = await pool.connect();

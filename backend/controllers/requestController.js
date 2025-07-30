@@ -5,7 +5,94 @@ import dayjs from 'dayjs';
 // controllers/bookingsController.js
 import { Parser } from 'json2csv'; // for CSV export
 
+export const getUserRequests = async (req, res) => {
+  const { userId } = req.params;
 
+  try {
+    const query = `
+      SELECT 
+        r.id AS request_id,
+        r.status,
+        r.booking_type,
+        r.timestamp AS requested_at,
+        c.name AS city_name,
+        
+        -- Requester info
+        ru.id AS requester_id,
+        ru.name AS requester_name,
+        ru.email AS requester_email,
+        ru.role AS requester_role,
+        ru.gender AS requester_gender,
+        
+        -- Booking member info
+        bm.id AS member_id,
+        bm.check_in,
+        bm.check_out,
+        mu.id AS member_user_id,
+        mu.name AS member_name,
+        mu.email AS member_email,
+        mu.role AS member_role,
+        mu.gender AS member_gender
+        
+      FROM requests r
+      JOIN cities c ON c.id = r.city_id
+      JOIN users ru ON ru.id = r.user_id
+      JOIN booking_members bm ON bm.request_id = r.id
+      JOIN users mu ON mu.id = bm.user_id
+      WHERE r.status = 'pending'
+        AND (r.user_id = $1 OR bm.user_id = $1)
+      ORDER BY r.timestamp DESC
+    `;
+
+    const { rows } = await pool.query(query, [userId]);
+
+    // Group by request
+    const requestMap = new Map();
+
+    for (const row of rows) {
+      if (!requestMap.has(row.request_id)) {
+        requestMap.set(row.request_id, {
+          requestId: row.request_id,
+          cityName: row.city_name,
+          bookingType: row.booking_type,
+          requestedAt: row.requested_at,
+          requestedUser: {
+            id: row.requester_id,
+            name: row.requester_name,
+            mail: row.requester_email,
+            role: row.requester_role,
+            gender: row.requester_gender
+          },
+          bookingMembers: []
+        });
+      }
+
+      const request = requestMap.get(row.request_id);
+      request.bookingMembers.push({
+        userId: row.member_user_id,
+        username: row.member_name,
+        role: row.member_role,
+        gender: row.member_gender,
+        mail: row.member_email,
+        checkIn: row.check_in,
+        checkOut: row.check_out
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: Array.from(requestMap.values())
+    });
+
+  } catch (error) {
+    console.error('Error fetching user requests:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
 
 
 

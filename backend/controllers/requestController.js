@@ -180,6 +180,104 @@ export const getAllPendingRequests = async (req, res) => {
   }
 };
 
+export const cancelRequest = async (req, res) => {
+  const { requestId, userId } = req.params;
+
+  try {
+    // First, get the request details
+    const requestQuery = `
+      SELECT r.id, r.booking_type, r.user_id as requester_id
+      FROM requests r
+      WHERE r.id = $1 AND r.status = 'pending'
+    `;
+    const requestResult = await pool.query(requestQuery, [requestId]);
+
+    if (requestResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Request not found or already processed'
+      });
+    }
+
+    const request = requestResult.rows[0];
+    const isRequester = request.requester_id === parseInt(userId);
+
+    if (request.booking_type === 'individual') {
+      // For individual requests - delete the entire request if user is the requester
+      if (!isRequester) {
+        return res.status(403).json({
+          success: false,
+          message: 'Only the requester can cancel an individual booking'
+        });
+      }
+
+      await pool.query('DELETE FROM requests WHERE id = $1', [requestId]);
+      
+      return res.status(200).json({
+        success: true,
+        message: 'Individual request cancelled successfully'
+      });
+    } else {
+      // For team requests
+      if (isRequester) {
+        // If requester is cancelling - delete the entire request
+        await pool.query('DELETE FROM requests WHERE id = $1', [requestId]);
+        
+        return res.status(200).json({
+          success: true,
+          message: 'Team request cancelled successfully by requester'
+        });
+      } else {
+        // If team member is cancelling - just remove them from booking_members
+        const deleteMemberQuery = `
+          DELETE FROM booking_members
+          WHERE request_id = $1 AND user_id = $2
+          RETURNING id
+        `;
+        const deleteResult = await pool.query(deleteMemberQuery, [requestId, userId]);
+
+        if (deleteResult.rows.length === 0) {
+          return res.status(404).json({
+            success: false,
+            message: 'User not found in booking members'
+          });
+        }
+
+        // Check if there are any members left
+        const membersLeftQuery = `
+          SELECT COUNT(*) FROM booking_members
+          WHERE request_id = $1
+        `;
+        const membersLeftResult = await pool.query(membersLeftQuery, [requestId]);
+
+        if (membersLeftResult.rows[0].count === '0') {
+          // If no members left, delete the entire request
+          await pool.query('DELETE FROM requests WHERE id = $1', [requestId]);
+        }
+
+        return res.status(200).json({
+          success: true,
+          message: 'Removed from team booking successfully'
+        });
+      }
+    }
+  } catch (error) {
+    console.error('Error cancelling request:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
+
+
+
+
+
+
+
+
 
 export const approveRequest = async (req, res) => {
   const requestId = parseInt(req.params.id);

@@ -1,6 +1,6 @@
 import pool from "../db.js";
 
-
+//updated
 export const getBookingHistory = async (req, res) => {
   const { city, status, role, search, checkIn, checkOut } = req.query;
 
@@ -130,6 +130,7 @@ export const getBookingHistory = async (req, res) => {
 };
 
 
+// updated
 export const createBooking = async (req, res) => {
   const client = await pool.connect();
 
@@ -176,7 +177,106 @@ export const createBooking = async (req, res) => {
   }
 };
 
+export const getUserUpcomingBookings = async (req, res) => {
+  const { userId } = req.params;
+  const currentDate = new Date().toISOString();
 
+  try {
+    const query = `
+      SELECT 
+        r.id AS request_id,
+        r.booking_type,
+        r.timestamp AS requested_at,
+        c.name AS city_name,
+        
+        -- Requester info (still included for context)
+        ru.id AS requester_id,
+        ru.name AS requester_name,
+        ru.email AS requester_email,
+        ru.role AS requester_role,
+        ru.gender AS requester_gender,
+        
+        -- Booking member info (the important part)
+        bm.id AS member_id,
+        bm.check_in,
+        bm.check_out,
+        
+        -- Accommodation details
+        aa.apartment_id,
+        apt.name AS apartment_name,
+        aa.flat_id,
+        f.name AS flat_name,
+        aa.room_id,
+        ro.name AS room_name,
+        aa.bed_id,
+        b.name AS bed_name
+        
+      FROM booking_members bm
+      JOIN requests r ON r.id = bm.request_id
+      JOIN cities c ON c.id = r.city_id
+      JOIN users ru ON ru.id = r.user_id
+      LEFT JOIN assigned_accommodations aa ON aa.booking_members_id = bm.id
+      LEFT JOIN apartments apt ON apt.id = aa.apartment_id
+      LEFT JOIN flats f ON f.id = aa.flat_id
+      LEFT JOIN rooms ro ON ro.id = aa.room_id
+      LEFT JOIN beds b ON b.id = aa.bed_id
+      WHERE r.status = 'approved'
+        AND bm.user_id = $1  -- Only bookings where user is a member
+        AND bm.check_in > $2 -- Only upcoming
+      ORDER BY bm.check_in ASC
+    `;
+
+    const { rows } = await pool.query(query, [userId, currentDate]);
+
+    // Transform results
+    const bookings = rows.map(row => ({
+      requestId: row.request_id,
+      cityName: row.city_name,
+      bookingType: row.booking_type,
+      requestedAt: row.requested_at,
+      requestedBy: {  // Still including requester info for reference
+        id: row.requester_id,
+        name: row.requester_name,
+        email: row.requester_email,
+        role: row.requester_role,
+        gender: row.requester_gender
+      },
+      checkIn: row.check_in,
+      checkOut: row.check_out,
+      accommodation: {
+        apartment: row.apartment_id ? {
+          id: row.apartment_id,
+          name: row.apartment_name
+        } : null,
+        flat: row.flat_id ? {
+          id: row.flat_id,
+          name: row.flat_name
+        } : null,
+        room: row.room_id ? {
+          id: row.room_id,
+          name: row.room_name
+        } : null,
+        bed: row.bed_id ? {
+          id: row.bed_id,
+          name: row.bed_name
+        } : null
+      }
+    }));
+
+    return res.status(200).json({
+      success: true,
+      data: bookings
+    });
+
+  } catch (error) {
+    console.error('Error fetching user upcoming bookings:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
 
 
 

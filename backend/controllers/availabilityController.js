@@ -2,7 +2,7 @@
 import pool from '../db.js';
 import dayjs from 'dayjs';
 
-
+//updated
 export const checkAvailability = async (req, res) => {
   const { cityId } = req.params;
   const { checkInTime, checkOutTime } = req.body;
@@ -121,14 +121,6 @@ export const checkAvailability = async (req, res) => {
     return res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
-
-
-
-
-
-
-
-
 
 
 

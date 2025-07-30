@@ -66,11 +66,10 @@ export const getBookingHistory = async (req, res) => {
       params.push(`%${search}%`);
     }
 
-   if (checkIn && checkOut) {
-  query += ` AND bm.check_in <= $${params.length + 1} AND bm.check_out >= $${params.length + 2}`;
-  params.push(checkOut, checkIn);
-}
-
+    if (checkIn && checkOut) {
+      query += ` AND bm.check_in < $${params.length + 2} AND bm.check_out > $${params.length + 1}`;
+      params.push(checkIn, checkOut);
+    }
 
     query += ` ORDER BY r.timestamp DESC`;
 

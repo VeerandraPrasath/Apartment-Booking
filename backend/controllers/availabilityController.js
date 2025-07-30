@@ -2,6 +2,136 @@
 import pool from '../db.js';
 import dayjs from 'dayjs';
 
+
+export const checkAvailability = async (req, res) => {
+  const { cityId } = req.params;
+  const { checkInTime, checkOutTime } = req.body;
+
+  if (!checkInTime || !checkOutTime) {
+    return res.status(400).json({ success: false, message: 'checkInTime and checkOutTime are required' });
+  }
+
+  if (new Date(checkOutTime) <= new Date(checkInTime)) {
+    return res.status(400).json({ success: false, message: 'checkOutTime must be after checkInTime' });
+  }
+
+  try {
+    // Query to get all booked resources during the requested period
+    const bookedResourcesQuery = `
+      SELECT 
+        aa.flat_id,
+        aa.room_id,
+        aa.bed_id
+      FROM assigned_accommodations aa
+      JOIN booking_members bm ON aa.booking_members_id = bm.id
+      JOIN requests r ON bm.request_id = r.id
+      WHERE aa.city_id = $1
+        AND r.status = 'approved'
+        AND ($2 < bm.check_out AND $3 > bm.check_in)
+    `;
+
+    // Query to get all resources in the city with their relationships
+    const allResourcesQuery = `
+      SELECT 
+        f.id as flat_id,
+        r.id as room_id,
+        b.id as bed_id
+      FROM flats f
+      JOIN apartments a ON f.apartment_id = a.id
+      LEFT JOIN rooms r ON r.flat_id = f.id
+      LEFT JOIN beds b ON b.room_id = r.id
+      WHERE a.city_id = $1
+    `;
+
+    const [bookedResourcesResult, allResourcesResult] = await Promise.all([
+      pool.query(bookedResourcesQuery, [cityId, checkInTime, checkOutTime]),
+      pool.query(allResourcesQuery, [cityId])
+    ]);
+
+    // Track booked resources
+    const bookedBeds = new Set();
+    const roomsWithBookedBeds = new Set(); // Rooms that have at least one bed booked
+    const flatsWithBookings = new Set();   // Flats that have at least one room or bed booked
+
+    bookedResourcesResult.rows.forEach(row => {
+      if (row.bed_id) {
+        bookedBeds.add(row.bed_id);
+        roomsWithBookedBeds.add(row.room_id);
+        flatsWithBookings.add(row.flat_id);
+      } else if (row.room_id) {
+        roomsWithBookedBeds.add(row.room_id);
+        flatsWithBookings.add(row.flat_id);
+      } else if (row.flat_id) {
+        flatsWithBookings.add(row.flat_id);
+      }
+    });
+
+    // Prepare data structures for counting
+    const allFlats = new Set();
+    const allRooms = new Set();
+    const allBeds = new Set();
+    const roomToFlatMap = new Map();
+    const bedToRoomMap = new Map();
+
+    allResourcesResult.rows.forEach(row => {
+      if (row.flat_id) allFlats.add(row.flat_id);
+      if (row.room_id) {
+        allRooms.add(row.room_id);
+        roomToFlatMap.set(row.room_id, row.flat_id);
+      }
+      if (row.bed_id) {
+        allBeds.add(row.bed_id);
+        bedToRoomMap.set(row.bed_id, row.room_id);
+      }
+    });
+
+    let availableBeds = 0;
+    const availableRooms = new Set();
+    const availableFlats = new Set();
+
+    allBeds.forEach(bedId => {
+      if (!bookedBeds.has(bedId)) {
+        availableBeds++;
+      }
+    });
+
+    allRooms.forEach(roomId => {
+      if (!roomsWithBookedBeds.has(roomId)) {
+        availableRooms.add(roomId);
+      }
+    });
+
+    // 3. Count flats (only flats with no bookings at all are available)
+    allFlats.forEach(flatId => {
+      if (!flatsWithBookings.has(flatId)) {
+        availableFlats.add(flatId);
+      }
+    });
+
+    return res.status(200).json({
+      success: true,
+      availability: {
+        flat: availableFlats.size,
+        room: availableRooms.size,
+        bed: availableBeds
+      }
+    });
+  } catch (err) {
+    console.error('Error checking availability:', err);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+
+
+
+
+
+
+
+
+
+
 export const getAvailabilityByCityId = async (req, res) => {
   const cityId = req.params.id;
   const fromDate = dayjs(req.body.from);

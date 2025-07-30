@@ -5,7 +5,7 @@ import cors from "cors";
 import pool from './db.js';
 
 import bookingRoutes from './routes/bookings.js';
-import historiesRoute from './routes/histories.js' 
+import requestRoutes from './routes/requests.js' 
 import accommodationsRoute from './routes/accommodations.js'
 import cityRoutes from './routes/cities.js';
 import occupancyRoutes from './routes/occupancy.js';
@@ -134,9 +134,9 @@ app.use('/api/apartments', apartmentRoutes);
 app.use('/api/flats', flatRoutes);
 app.use('/api/rooms',roomRoutes)
 app.use('/api/occupancy',occupancyRoutes);
-// app.use('/api/availability',availabilityRoutes)
+app.use('/api/availability',availabilityRoutes)
 app.use('/api/bookings',bookingRoutes)
-app.use('/api/requests',historiesRoute)
+app.use('/api/requests',requestRoutes)
 app.use('/api/accommodation',accommodationsRoute)
 app.use('/api/beds',bedRoutes);
 app.listen(5001, () => {

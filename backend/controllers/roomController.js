@@ -17,7 +17,7 @@ export const createRoom=  async (req, res) => {
       const bedName = `Bed ${i}`;
       bedInserts.push(
         pool.query(
-          `INSERT INTO beds (name, room_id, status) VALUES ($1, $2, 'available')`,
+          `INSERT INTO beds (name, room_id) VALUES ($1, $2)`,
           [bedName, roomId]
         )
       );

@@ -188,20 +188,19 @@ export const getUserUpcomingBookings = async (req, res) => {
         r.booking_type,
         r.timestamp AS requested_at,
         c.name AS city_name,
-        
-        -- Requester info (still included for context)
         ru.id AS requester_id,
         ru.name AS requester_name,
         ru.email AS requester_email,
         ru.role AS requester_role,
         ru.gender AS requester_gender,
-        
-        -- Booking member info (the important part)
         bm.id AS member_id,
         bm.check_in,
         bm.check_out,
-        
-        -- Accommodation details
+        mu.id AS member_user_id,
+        mu.name AS member_name,
+        mu.email AS member_email,
+        mu.role AS member_role,
+        mu.gender AS member_gender,
         aa.apartment_id,
         apt.name AS apartment_name,
         aa.flat_id,
@@ -210,66 +209,168 @@ export const getUserUpcomingBookings = async (req, res) => {
         ro.name AS room_name,
         aa.bed_id,
         b.name AS bed_name
-        
-      FROM booking_members bm
-      JOIN requests r ON r.id = bm.request_id
+      FROM requests r
       JOIN cities c ON c.id = r.city_id
       JOIN users ru ON ru.id = r.user_id
+      JOIN booking_members bm ON bm.request_id = r.id
+      JOIN users mu ON mu.id = bm.user_id
       LEFT JOIN assigned_accommodations aa ON aa.booking_members_id = bm.id
       LEFT JOIN apartments apt ON apt.id = aa.apartment_id
       LEFT JOIN flats f ON f.id = aa.flat_id
       LEFT JOIN rooms ro ON ro.id = aa.room_id
       LEFT JOIN beds b ON b.id = aa.bed_id
       WHERE r.status = 'approved'
-        AND bm.user_id = $1  -- Only bookings where user is a member
-        AND bm.check_in > $2 -- Only upcoming
+        AND (r.user_id = $1 OR bm.user_id = $1)
+        AND bm.check_in > $2
       ORDER BY bm.check_in ASC
     `;
 
     const { rows } = await pool.query(query, [userId, currentDate]);
 
-    // Transform results
-    const bookings = rows.map(row => ({
-      requestId: row.request_id,
-      cityName: row.city_name,
-      bookingType: row.booking_type,
-      requestedAt: row.requested_at,
-      requestedBy: {  // Still including requester info for reference
-        id: row.requester_id,
-        name: row.requester_name,
-        email: row.requester_email,
-        role: row.requester_role,
-        gender: row.requester_gender
-      },
-      checkIn: row.check_in,
-      checkOut: row.check_out,
-      accommodation: {
-        apartment: row.apartment_id ? {
-          id: row.apartment_id,
-          name: row.apartment_name
-        } : null,
-        flat: row.flat_id ? {
-          id: row.flat_id,
-          name: row.flat_name
-        } : null,
-        room: row.room_id ? {
-          id: row.room_id,
-          name: row.room_name
-        } : null,
-        bed: row.bed_id ? {
-          id: row.bed_id,
-          name: row.bed_name
-        } : null
+    const bookingsMap = new Map();
+
+    for (const row of rows) {
+      if (!bookingsMap.has(row.request_id)) {
+        bookingsMap.set(row.request_id, {
+          requestId: row.request_id,
+          cityName: row.city_name,
+          bookingType: row.booking_type,
+          requestedAt: row.requested_at,
+          requestedUser: {
+            id: row.requester_id,
+            name: row.requester_name,
+            email: row.requester_email,
+            role: row.requester_role,
+            gender: row.requester_gender
+          },
+          bookingMembers: []
+        });
       }
-    }));
+
+      const booking = bookingsMap.get(row.request_id);
+      
+      // Only add if not the requesting user
+      if (row.member_user_id !== parseInt(userId)) {
+        booking.bookingMembers.push({
+          userId: row.member_user_id,
+          name: row.member_name,
+          email: row.member_email,
+          role: row.member_role,
+          gender: row.member_gender,
+          checkIn: row.check_in,
+          checkOut: row.check_out,
+          accommodation: {
+            apartment: row.apartment_id ? { id: row.apartment_id, name: row.apartment_name } : null,
+            flat: row.flat_id ? { id: row.flat_id, name: row.flat_name } : null,
+            room: row.room_id ? { id: row.room_id, name: row.room_name } : null,
+            bed: row.bed_id ? { id: row.bed_id, name: row.bed_name } : null
+          }
+        });
+      }
+    }
 
     return res.status(200).json({
       success: true,
-      data: bookings
+      data: Array.from(bookingsMap.values())
     });
 
   } catch (error) {
-    console.error('Error fetching user upcoming bookings:', error);
+    console.error('Error fetching upcoming bookings:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
+
+export const cancelBooking = async (req, res) => {
+  const { requestId, userId } = req.params;
+
+  try {
+    await pool.query('BEGIN');
+
+    // 1. Get request details with FOR UPDATE lock
+    const requestQuery = `
+      SELECT id, booking_type 
+      FROM requests 
+      WHERE id = $1 AND status = 'approved'
+      FOR UPDATE
+    `;
+    const requestResult = await pool.query(requestQuery, [requestId]);
+
+    if (requestResult.rows.length === 0) {
+      await pool.query('ROLLBACK');
+      return res.status(404).json({
+        success: false,
+        message: 'Approved booking not found'
+      });
+    }
+
+    const request = requestResult.rows[0];
+
+    // 2. Find the member's booking
+    const memberQuery = `
+      SELECT id FROM booking_members
+      WHERE request_id = $1 AND user_id = $2
+    `;
+    const memberResult = await pool.query(memberQuery, [requestId, userId]);
+
+    if (memberResult.rows.length === 0) {
+      await pool.query('ROLLBACK');
+      return res.status(404).json({
+        success: false,
+        message: 'User not found in booking members'
+      });
+    }
+
+    const memberId = memberResult.rows[0].id;
+
+    // 3. Release accommodation
+    await pool.query(
+      'DELETE FROM assigned_accommodations WHERE booking_members_id = $1',
+      [memberId]
+    );
+
+    // 4. Remove member
+    await pool.query(
+      'DELETE FROM booking_members WHERE id = $1',
+      [memberId]
+    );
+
+    // 5. For individual bookings, cancel entire request
+    if (request.booking_type === 'individual') {
+      await pool.query(
+        `UPDATE requests SET status = 'cancelled', processed_at = NOW() 
+         WHERE id = $1`,
+        [requestId]
+      );
+    } else {
+      // For team bookings, check if any members remain
+      const remainingResult = await pool.query(
+        'SELECT COUNT(*) FROM booking_members WHERE request_id = $1',
+        [requestId]
+      );
+      
+      if (remainingResult.rows[0].count === '0') {
+        await pool.query(
+          `UPDATE requests SET status = 'cancelled', processed_at = NOW() 
+           WHERE id = $1`,
+          [requestId]
+        );
+      }
+    }
+
+    await pool.query('COMMIT');
+
+    return res.status(200).json({
+      success: true,
+      message: 'Booking cancelled successfully'
+    });
+
+  } catch (error) {
+    await pool.query('ROLLBACK');
+    console.error('Error cancelling booking:', error);
     return res.status(500).json({
       success: false,
       message: 'Internal server error',
@@ -279,7 +380,115 @@ export const getUserUpcomingBookings = async (req, res) => {
 };
 
 
+export const getUserBookingHistory = async (req, res) => {
+  const { userId } = req.params;
 
+  try {
+    const query = `
+      SELECT 
+        r.id AS request_id,
+        r.status,
+        r.booking_type,
+        r.timestamp AS requested_at,
+        r.processed_at,
+        c.id AS city_id,
+        c.name AS city_name,
+        ru.id AS requester_id,
+        ru.name AS requester_name,
+        ru.email AS requester_email,
+        ru.role AS requester_role,
+        ru.gender AS requester_gender,
+        bm.id AS member_id,
+        bm.check_in,
+        bm.check_out,
+        mu.id AS member_user_id,
+        mu.name AS member_name,
+        mu.email AS member_email,
+        mu.role AS member_role,
+        mu.gender AS member_gender,
+        aa.apartment_id,
+        apt.name AS apartment_name,
+        aa.flat_id,
+        f.name AS flat_name,
+        aa.room_id,
+        ro.name AS room_name,
+        aa.bed_id,
+        b.name AS bed_name
+      FROM requests r
+      JOIN cities c ON c.id = r.city_id
+      JOIN users ru ON ru.id = r.user_id
+      JOIN booking_members bm ON bm.request_id = r.id
+      JOIN users mu ON mu.id = bm.user_id
+      LEFT JOIN assigned_accommodations aa ON aa.booking_members_id = bm.id
+      LEFT JOIN apartments apt ON apt.id = aa.apartment_id
+      LEFT JOIN flats f ON f.id = aa.flat_id
+      LEFT JOIN rooms ro ON ro.id = aa.room_id
+      LEFT JOIN beds b ON b.id = aa.bed_id
+      WHERE (r.user_id = $1 OR bm.user_id = $1)
+        AND r.status IN ('approved', 'rejected', 'cancelled')
+      ORDER BY r.timestamp DESC
+    `;
+
+    const { rows } = await pool.query(query, [userId]);
+
+    const historyMap = new Map();
+
+    for (const row of rows) {
+      if (!historyMap.has(row.request_id)) {
+        historyMap.set(row.request_id, {
+          requestId: row.request_id,
+          status: row.status,
+          processedAt: row.processed_at,
+          city: { id: row.city_id, name: row.city_name },
+          requestedAt: row.requested_at,
+          bookingType: row.booking_type,
+          requestedUser: {
+            id: row.requester_id,
+            name: row.requester_name,
+            email: row.requester_email,
+            role: row.requester_role,
+            gender: row.requester_gender
+          },
+          bookingMembers: []
+        });
+      }
+
+      const booking = historyMap.get(row.request_id);
+      
+      // Only add if not the requesting user
+      if (row.member_user_id !== parseInt(userId)) {
+        booking.bookingMembers.push({
+          userId: row.member_user_id,
+          name: row.member_name,
+          email: row.member_email,
+          role: row.member_role,
+          gender: row.member_gender,
+          checkIn: row.check_in,
+          checkOut: row.check_out,
+          accommodation: {
+            apartment: row.apartment_id ? { id: row.apartment_id, name: row.apartment_name } : null,
+            flat: row.flat_id ? { id: row.flat_id, name: row.flat_name } : null,
+            room: row.room_id ? { id: row.room_id, name: row.room_name } : null,
+            bed: row.bed_id ? { id: row.bed_id, name: row.bed_name } : null
+          }
+        });
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: Array.from(historyMap.values())
+    });
+
+  } catch (error) {
+    console.error('Error fetching booking history:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
 
 // export const createBooking = async (req, res) => {
 //   const {

@@ -16,15 +16,11 @@ export const getUserRequests = async (req, res) => {
         r.booking_type,
         r.timestamp AS requested_at,
         c.name AS city_name,
-        
-        -- Requester info
         ru.id AS requester_id,
         ru.name AS requester_name,
         ru.email AS requester_email,
         ru.role AS requester_role,
         ru.gender AS requester_gender,
-        
-        -- Booking member info
         bm.id AS member_id,
         bm.check_in,
         bm.check_out,
@@ -33,7 +29,6 @@ export const getUserRequests = async (req, res) => {
         mu.email AS member_email,
         mu.role AS member_role,
         mu.gender AS member_gender
-        
       FROM requests r
       JOIN cities c ON c.id = r.city_id
       JOIN users ru ON ru.id = r.user_id
@@ -46,7 +41,6 @@ export const getUserRequests = async (req, res) => {
 
     const { rows } = await pool.query(query, [userId]);
 
-    // Group by request
     const requestMap = new Map();
 
     for (const row of rows) {
@@ -68,15 +62,19 @@ export const getUserRequests = async (req, res) => {
       }
 
       const request = requestMap.get(row.request_id);
-      request.bookingMembers.push({
-        userId: row.member_user_id,
-        username: row.member_name,
-        role: row.member_role,
-        gender: row.member_gender,
-        mail: row.member_email,
-        checkIn: row.check_in,
-        checkOut: row.check_out
-      });
+      
+      // Only add if not the requesting user
+      if (row.member_user_id !== parseInt(userId)) {
+        request.bookingMembers.push({
+          userId: row.member_user_id,
+          username: row.member_name,
+          role: row.member_role,
+          gender: row.member_gender,
+          mail: row.member_email,
+          checkIn: row.check_in,
+          checkOut: row.check_out
+        });
+      }
     }
 
     return res.status(200).json({

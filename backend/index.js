@@ -5,7 +5,7 @@ import cors from "cors";
 import pool from './db.js';
 
 import bookingRoutes from './routes/bookings.js';
-import historiesRoute from './routes/histories.js' 
+import requestRoutes from './routes/requests.js' 
 import accommodationsRoute from './routes/accommodations.js'
 import cityRoutes from './routes/cities.js';
 import occupancyRoutes from './routes/occupancy.js';
@@ -68,6 +68,7 @@ app.get("/auth/callback", async (req, res) => {
 const name = user.displayName;
 const email = user.mail || user.userPrincipalName;
 const jobTitle = user.jobTitle || "Not specified";
+const gender='male';
 let userId;
 try {
   // Check if user exists
@@ -79,8 +80,8 @@ try {
   if (userCheck.rows.length === 0) {
     // Insert new user
    const insertResult = await pool.query(
-  'INSERT INTO users (name, email, role) VALUES ($1, $2, $3) RETURNING id',
-  [name, email, jobTitle]
+  'INSERT INTO users (name, email, role,gender) VALUES ($1, $2, $3, $4) RETURNING id',
+  [name, email, jobTitle,gender]
 );
 userId = insertResult.rows[0].id;
 
@@ -133,9 +134,9 @@ app.use('/api/apartments', apartmentRoutes);
 app.use('/api/flats', flatRoutes);
 app.use('/api/rooms',roomRoutes)
 app.use('/api/occupancy',occupancyRoutes);
-// app.use('/api/availability',availabilityRoutes)
+app.use('/api/availability',availabilityRoutes)
 app.use('/api/bookings',bookingRoutes)
-app.use('/api/requests',historiesRoute)
+app.use('/api/requests',requestRoutes)
 app.use('/api/accommodation',accommodationsRoute)
 app.use('/api/beds',bedRoutes);
 app.listen(5001, () => {

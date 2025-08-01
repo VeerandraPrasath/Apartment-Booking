@@ -1,15 +1,13 @@
 import express from 'express';
 import {
-getAvailabilityByCityId
+getCityAvailability,
+checkAvailability
 } from '../controllers/availabilityController.js';
 
 const router = express.Router();
 
+router.post('/check/:cityId', checkAvailability);
 
-router.post('/city/:id', getAvailabilityByCityId);
-router.get('/', async()=> {
-  // This route can be used to get all availability data if needed
-  res.status(200).json({ message: "Availability API is working" });
+router.post('/city/:cityId', getCityAvailability);
 
-}); // Assuming you want to allow GET requests as well
 export default router;

@@ -7,10 +7,10 @@ const router = express.Router();
 router.get('/',getAllPendingRequests);
 router.get('/user/:userId', getUserRequests);
 router.delete('/:requestId/cancel/:userId', cancelRequest);
+router.post('/:requestId/approve',approveRequest);
+router.post('/:requestId/reject',rejectRequest);
 
 
 router.post('/history/export',exportBookingHistory);
-router.post('/:id/approve',approveRequest);
-router.post('/:id/reject',rejectRequest);
 
 export default router;

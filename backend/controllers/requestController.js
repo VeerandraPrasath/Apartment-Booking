@@ -278,122 +278,250 @@ export const cancelRequest = async (req, res) => {
 
 
 export const approveRequest = async (req, res) => {
-  const requestId = parseInt(req.params.id);
-  const {
-    assignedAccommodations = [],
-    remarks
-  } = req.body;
+  const requestId = parseInt(req.params.requestId);
+  const { allocatedAccommodation = [] } = req.body;
 
-  console.log(assignedAccommodations);
+  if (!requestId || !Array.isArray(allocatedAccommodation)) {
+    return res.status(400).json({ 
+      success: false, 
+      message: 'Invalid request parameters' 
+    });
+  }
+
+  const client = await db.connect(); // Get a DB client for transactions
 
   try {
-    // Step 1: Fetch the request
-    const requestRes = await db.query(
-      `SELECT * FROM requests WHERE id = $1`,
+    await client.query('BEGIN'); // Start transaction
+
+    // 1. Validate and lock the request
+    const requestRes = await client.query(
+      `SELECT id, city_id, status 
+       FROM requests 
+       WHERE id = $1 
+       FOR UPDATE`, // Lock row for update
       [requestId]
     );
 
     if (requestRes.rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Request not found' });
+      await client.query('ROLLBACK');
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Request not found' 
+      });
     }
 
     const request = requestRes.rows[0];
     
-    // Step 2: Mark each accommodation as booked and insert assignment
-    for (const member of assignedAccommodations) {
-    
+    if (request.status !== 'pending') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ 
+        success: false, 
+        message: 'Request already processed' 
+      });
+    }
 
-      // Insert into assigned_accommodations
-      await db.query(
-        `INSERT INTO assigned_accommodations
-          (request_id, user_email, city_id, apartment_id, flat_id, room_id, bed_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    // 2. Validate all booking members belong to this request
+    const bookingMemberIds = allocatedAccommodation.map(a => a.bookingMemberId);
+    const membersRes = await client.query(
+      `SELECT id FROM booking_members 
+       WHERE id = ANY($1::int[]) 
+       AND request_id = $2`,
+      [bookingMemberIds, requestId]
+    );
+
+    if (membersRes.rows.length !== allocatedAccommodation.length) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid booking member assignments' 
+      });
+    }
+
+    // 3. Process accommodations
+    for (const allocation of allocatedAccommodation) {
+      const { bookingMemberId, assignedAccommodation } = allocation;
+      const { apartmentId, flatId, roomId, bedId } = assignedAccommodation;
+
+      // Validate accommodation hierarchy
+      if (bedId && !roomId) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ 
+          success: false, 
+          message: 'Bed assignment requires room ID' 
+        });
+      }
+
+      if (roomId && !flatId) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ 
+          success: false, 
+          message: 'Room assignment requires flat ID' 
+        });
+      }
+
+      // Check accommodation availability
+      const conflictCheck = await client.query(
+        `SELECT 1 FROM assigned_accommodations
+         WHERE (apartment_id = $1 OR flat_id = $2 OR room_id = $3 OR bed_id = $4)
+         AND booking_members_id IN (
+           SELECT id FROM booking_members 
+           WHERE request_id != $5
+         )`,
+        [apartmentId, flatId, roomId, bedId, requestId]
+      );
+
+      if (conflictCheck.rows.length > 0) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ 
+          success: false, 
+          message: 'Accommodation already assigned to another request' 
+        });
+      }
+
+      // Insert assignment
+      await client.query(
+        `INSERT INTO assigned_accommodations (
+          booking_members_id,
+          city_id,
+          apartment_id,
+          flat_id,
+          room_id,
+          bed_id
+        ) VALUES ($1, $2, $3, $4, $5, $6)`,
         [
-          requestId,
-          member.email,
+          bookingMemberId,
           request.city_id,
-          member.apartment_id || null,
-          member.flat_id || null,
-          member.room_id || null,
-          member.bed_id || null
+          apartmentId || null,
+          flatId || null,
+          roomId || null,
+          bedId || null
         ]
       );
     }
 
-    // Step 3: Update request status only
+    // 4. Update request status
     const processedAt = new Date();
-    await db.query(
+    await client.query(
       `UPDATE requests
-       SET status = 'approved', remarks = $1, processed_at = $2
+       SET status = 'approved', 
+           processed_at = $1,
+           remarks = $2
        WHERE id = $3`,
-      [remarks, processedAt, requestId]
+      [processedAt, req.body.remarks || null, requestId]
     );
 
-    // Step 4: Final response
+    await client.query('COMMIT'); // Commit transaction
+
+    // 5. Send notifications (could be moved to background job)
+    // await sendApprovalNotifications(requestId);
+
     return res.status(200).json({
       success: true,
-      message: "Request approved.",
-      request: {
-        id: requestId,
-        status: "approved",
-        assignedAccommodations,
-        remarks,
-        processedAt
+      message: "Request approved successfully",
+      data: {
+        requestId,
+        processedAt,
+        assignedCount: allocatedAccommodation.length
       }
     });
 
   } catch (error) {
+    await client.query('ROLLBACK');
     console.error("Error approving request:", error);
     return res.status(500).json({
       success: false,
-      message: "An error occurred while approving the request"
+      message: "Internal server error while processing request",
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
+  } finally {
+    client.release(); // Release client back to pool
   }
 };
-
 
 export const rejectRequest = async (req, res) => {
-  const requestId = parseInt(req.params.id);
-  const { remarks, assigned_by } = req.body; // assigned_by is optional and unused here
-  
-  try {
-    // Update the request status and remarks
-    const result = await pool.query(
-      `
-      UPDATE requests
-      SET status = 'rejected',
-          remarks = $1,
-          processed_at = NOW()
-      WHERE id = $2
-      RETURNING id, status, remarks
-      `,
-      [remarks || null, requestId]
-    );
+  const requestId = parseInt(req.params.requestId);
+  const { remarks } = req.body;
 
-    if (result.rowCount === 0) {
-      return res.status(404).json({ success: false, message: 'Request not found' });
-    }
-
-    const rejectedRequest = result.rows[0];
-    
-    res.status(200).json({
-      success: true,
-      message: 'Request rejected.',
-      request: {
-        id: rejectedRequest.id,
-        status: rejectedRequest.status,
-        remarks: rejectedRequest.remarks
-      }
-    });
-  } catch (error) {
-    console.error('Error rejecting request:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to reject request',
-      error: error.message
+  // Validate mandatory remarks
+  if (!remarks || remarks.trim().length === 0) {
+    return res.status(400).json({ 
+      success: false, 
+      message: 'Remarks are mandatory when rejecting a request' 
     });
   }
+
+  const client = await db.connect(); // Get a DB client for transaction
+
+  try {
+    await client.query('BEGIN'); // Start transaction
+
+    // 1. Validate and lock the request
+    const requestRes = await client.query(
+      `SELECT id, status 
+       FROM requests 
+       WHERE id = $1 
+       FOR UPDATE`, // Lock row for update
+      [requestId]
+    );
+
+    if (requestRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Request not found' 
+      });
+    }
+
+    const request = requestRes.rows[0];
+    
+    if (request.status !== 'pending') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ 
+        success: false, 
+        message: 'Request already processed' 
+      });
+    }
+
+    // 2. Update request status to rejected
+    const processedAt = new Date();
+    await client.query(
+      `UPDATE requests
+       SET status = 'rejected', 
+           processed_at = $1,
+           remarks = $2
+       WHERE id = $3`,
+      [processedAt, remarks, requestId]
+    );
+
+    await client.query('COMMIT'); // Commit transaction
+
+    // 3. Send rejection notification (could be moved to background job)
+    // await sendRejectionNotification(requestId, remarks);
+
+    return res.status(200).json({
+      success: true,
+      message: "Request rejected successfully",
+      data: {
+        requestId,
+        processedAt,
+        remarks
+      }
+    });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error("Error rejecting request:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error while processing rejection",
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  } finally {
+    client.release(); // Release client back to pool
+  }
 };
+
+
 
 export const exportBookingHistory = async (req, res) => {
   const {

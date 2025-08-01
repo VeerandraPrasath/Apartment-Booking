@@ -1,6 +1,6 @@
 import express from 'express';
 import {
-getAvailabilityByCityId,
+getCityAvailability,
 checkAvailability
 } from '../controllers/availabilityController.js';
 
@@ -8,6 +8,6 @@ const router = express.Router();
 
 router.post('/check/:cityId', checkAvailability);
 
-router.post('/city/:id', getAvailabilityByCityId);
+router.post('/city/:cityId', getCityAvailability);
 
 export default router;

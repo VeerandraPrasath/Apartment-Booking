@@ -1,5 +1,6 @@
 
 import pool from '../db.js';
+import db from '../db.js';
 import dayjs from 'dayjs';
 
 //updated
@@ -124,111 +125,160 @@ export const checkAvailability = async (req, res) => {
 
 
 
-export const getAvailabilityByCityId = async (req, res) => {
-  const cityId = req.params.id;
-  const fromDate = dayjs(req.body.from);
-  const toDate = dayjs(req.body.to);
+export const getCityAvailability = async (req, res) => {
+  const cityId = parseInt(req.params.cityId);
+  const { DATES } = req.body;
 
   try {
-    // 1. Validate city
-    const cityResult = await pool.query('SELECT * FROM cities WHERE id = $1', [cityId]);
-    if (cityResult.rows.length === 0) {
-      return res.status(404).json({ success: false, error: 'City not found' });
-    }
-    const cityName = cityResult.rows[0].name;
-
-    // 2. Get conflicting approved requests
-    const requestsResult = await pool.query(
-      `SELECT id FROM requests 
-       WHERE city_id = $1 
-         AND status = 'approved'
-         AND date_from <= $2 
-         AND date_to >= $1`,
-      [cityId, toDate.toDate(), fromDate.toDate()]
-    );
-    const conflictingRequestIds = requestsResult.rows.map(r => r.id);
-
-    // 3. Get assigned accommodations for those requests
-    let assignedFlats = new Set();
-    let assignedRooms = new Set();
-    let assignedBeds = new Set();
-
-    if (conflictingRequestIds.length > 0) {
-      const placeholders = conflictingRequestIds.map((_, i) => `$${i + 1}`).join(',');
-      const assignedResult = await pool.query(
-        `SELECT flat_id, room_id, bed_id 
-         FROM assigned_accommodations 
-         WHERE request_id IN (${placeholders})`,
-        conflictingRequestIds
-      );
-
-      for (const row of assignedResult.rows) {
-        if (row.bed_id) {
-          assignedBeds.add(row.bed_id);
-        } else if (row.room_id) {
-          assignedRooms.add(row.room_id);
-        } else if (row.flat_id) {
-          assignedFlats.add(row.flat_id);
-        }
-      }
-    }
-
-    // 4. Get apartments
-    const apartmentsRes = await pool.query(
-      `SELECT * FROM apartments WHERE city_id = $1`,
+    // Validate city exists
+    const cityRes = await db.query(
+      `SELECT name FROM cities WHERE id = $1`,
       [cityId]
     );
-    const apartments = apartmentsRes.rows;
+    
+    if (cityRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'City not found' });
+    }
 
-    const responseApartments = [];
+    const cityName = cityRes.rows[0].name;
+    const responseData = [];
 
-    for (const apt of apartments) {
-      const flatRes = await pool.query(`SELECT * FROM flats WHERE apartment_id = $1`, [apt.id]);
-      const flats = [];
+    // Process each date range
+    for (const dateRange of DATES) {
+      const { checkIn, checkOut } = dateRange;
+      
+      // Get all apartments in the city
+      const apartmentsRes = await db.query(
+        `SELECT id, name FROM apartments WHERE city_id = $1`,
+        [cityId]
+      );
 
-      for (const flat of flatRes.rows) {
-        const roomRes = await pool.query(`SELECT * FROM rooms WHERE flat_id = $1`, [flat.id]);
-        const rooms = [];
+      const apartmentsStatus = [];
 
-        for (const room of roomRes.rows) {
-          const bedRes = await pool.query(`SELECT * FROM beds WHERE room_id = $1`, [room.id]);
-          const cottages = bedRes.rows.map(bed => ({
-            id: bed.id,
-            name: bed.name,
-            is_booked: assignedBeds.has(bed.id)
-          }));
+      for (const apartment of apartmentsRes.rows) {
+        // Get ALL flats in the apartment
+        const flatsRes = await db.query(
+          `SELECT f.id, f.name FROM flats f WHERE f.apartment_id = $1`,
+          [apartment.id]
+        );
 
-          rooms.push({
-            id: room.id,
-            name: room.name,
-            is_booked: assignedRooms.has(room.id),
-            cottages
+        const flats = [];
+
+        for (const flat of flatsRes.rows) {
+          // Check flat availability (entire flat must be free)
+          const flatAvailabilityRes = await db.query(
+            `SELECT 
+              NOT EXISTS (
+                SELECT 1 FROM assigned_accommodations aa
+                WHERE aa.flat_id = $1
+                AND aa.booking_members_id IN (
+                  SELECT bm.id FROM booking_members bm
+                  JOIN requests r ON r.id = bm.request_id
+                  WHERE r.status = 'approved'
+                  AND NOT (bm.check_out <= $2 OR bm.check_in >= $3)
+                )
+              ) as is_available,
+              (
+                SELECT u.gender 
+                FROM assigned_accommodations aa
+                JOIN booking_members bm ON bm.id = aa.booking_members_id
+                JOIN users u ON u.id = bm.user_id
+                JOIN requests r ON r.id = bm.request_id
+                WHERE aa.flat_id = $1
+                AND r.status = 'approved'
+                AND NOT (bm.check_out <= $2 OR bm.check_in >= $3)
+                LIMIT 1
+              ) as gender
+            `,
+            [flat.id, new Date(checkIn), new Date(checkOut)]
+          );
+
+          const isFlatAvailable = flatAvailabilityRes.rows[0].is_available;
+          const flatGender = isFlatAvailable ? null : flatAvailabilityRes.rows[0].gender;
+
+          // Get ALL rooms in the flat
+          const roomsRes = await db.query(
+            `SELECT r.id, r.name FROM rooms r WHERE r.flat_id = $1`,
+            [flat.id]
+          );
+
+          const rooms = [];
+
+          for (const room of roomsRes.rows) {
+            // Get ALL beds in the room with their availability status
+            const bedsRes = await db.query(
+              `SELECT 
+                b.id, 
+                b.name,
+                NOT EXISTS (
+                  SELECT 1 FROM assigned_accommodations aa
+                  WHERE aa.bed_id = b.id
+                  AND aa.booking_members_id IN (
+                    SELECT bm.id FROM booking_members bm
+                    JOIN requests r ON r.id = bm.request_id
+                    WHERE r.status = 'approved'
+                    AND NOT (bm.check_out <= $2 OR bm.check_in >= $3)
+                  )
+                ) as is_available
+               FROM beds b
+               WHERE b.room_id = $1`,
+              [room.id, new Date(checkIn), new Date(checkOut)]
+            );
+
+            const beds = bedsRes.rows.map(bed => ({
+              id: bed.id,
+              name: bed.name,
+              isAvailable: bed.is_available
+            }));
+
+            // Room is available only if ALL beds are available
+            const isRoomAvailable = beds.every(bed => bed.isAvailable);
+
+            rooms.push({
+              id: room.id,
+              name: room.name,
+              isAvailable: isRoomAvailable,
+              beds
+            });
+          }
+
+          flats.push({
+            id: flat.id,
+            name: flat.name,
+            isAvailable: isFlatAvailable,
+            gender: flatGender,
+            rooms
           });
         }
 
-        flats.push({
-          id: flat.id,
-          name: flat.name,
-          is_booked: assignedFlats.has(flat.id),
-          rooms
+        apartmentsStatus.push({
+          id: apartment.id,
+          name: apartment.name,
+          flats
         });
       }
 
-      responseApartments.push({
-        id: apt.id,
-        name: apt.name,
-        google_map_link: apt.google_map_link,
-        flats
+      responseData.push({
+        checkIn,
+        checkOut,
+        apartmentsStatus
       });
     }
 
-    res.json({ success: true, apartments: responseApartments });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false, error: 'Server error' });
+    return res.status(200).json({
+      cityId,
+      cityName,
+      data: responseData
+    });
+
+  } catch (error) {
+    console.error("Error checking availability:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error while checking availability"
+    });
   }
 };
-
 
 // export const getAvailabilityByCityId = async (req, res) => {
 //   const cityId = req.params.id;
